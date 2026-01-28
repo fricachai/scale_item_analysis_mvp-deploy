@@ -32,7 +32,7 @@ except Exception:
 
 # ---- Page ----
 st.set_page_config(page_title="fricachai 論文統計分析專業版(release 1.0) 2026.01.28 ", layout="wide")
-st.title("📊 fricachai 論文統計分析專業版")
+st.title("📊 fricachai 論文統計分析專業版(release 1.0) 2026.01.28")
 
 
 # ---- Helpers ----
