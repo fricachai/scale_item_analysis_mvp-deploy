@@ -35,6 +35,17 @@ st.set_page_config(page_title="fricachai 論文統計分析專業版(release 1.0
 
 import streamlit as st
 import streamlit_authenticator as stauth
+
+def secrets_to_dict(x):
+    """把 st.secrets 的巢狀 Secrets 物件轉成純 Python dict/list/primitive"""
+    if hasattr(x, "to_dict"):
+        return secrets_to_dict(x.to_dict())
+    if isinstance(x, dict):
+        return {k: secrets_to_dict(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [secrets_to_dict(v) for v in x]
+    return x
+
 import copy
 
 # ===== Authentication (Level B) =====
