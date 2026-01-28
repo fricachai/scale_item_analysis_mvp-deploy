@@ -654,6 +654,102 @@ def build_discriminant_validity_table(df_norm: pd.DataFrame, item_df: pd.DataFra
 
     return mat
 
+# =========================
+# ✅ 構面現況分析表（題號/構面/問項/平均數/標準差/構面排序/構面平均）
+# =========================
+
+def _subdim_code(item_code: str) -> str:
+    """
+    子構面代碼：取題項代碼前兩碼
+    例如：A11→A1、A105→A1、D54→D5
+    """
+    s = str(item_code).strip()
+    return s[:2].upper() if len(s) >= 2 else s.upper()
+
+
+def _item_sort_key(code: str):
+    """
+    題號排序：A11, A12, ... A105, ... D54
+    規則：先字母，再數字（轉 int），再處理 _ 後綴
+    """
+    s = str(code).strip()
+    m = re.match(r"^([A-Za-z])(\d+)(?:_(\d+))?$", s)
+    if not m:
+        return (s, 10**9, 10**9)
+    letter = m.group(1).upper()
+    num = int(m.group(2))
+    suf = int(m.group(3)) if m.group(3) is not None else 0
+    return (letter, num, suf)
+
+
+def build_item_status_table(df_raw: pd.DataFrame, df_norm: pd.DataFrame, mapping: dict) -> pd.DataFrame:
+    """
+    產出「構面現況分析表」（比照你第二張截圖的格式）
+    欄位：
+    - 題號：A11 ... D54（依實際題數）
+    - 構面：子構面代碼（A1、A2...）
+    - 問項：原始欄名（若原始欄名是完整題目就會顯示題目文字）
+    - 平均數、標準差：針對題項欄位計算（四位小數）
+    - 構面排序：該題在子構面內的平均數排名（1=最高；整數）
+    - 構面平均：該子構面所有題項之「平均數」再取平均（四位小數）
+    """
+    item_cols = _find_item_cols(df_norm)
+    if not item_cols:
+        return pd.DataFrame()
+
+    # code -> 原始欄名（問項文字）
+    inv_map = {}
+    if isinstance(mapping, dict) and mapping:
+        for k, v in mapping.items():
+            vv = str(v).strip()
+            if vv not in inv_map:
+                inv_map[vv] = str(k)
+
+    rows = []
+    for code in item_cols:
+        x = pd.to_numeric(df_norm[code], errors="coerce")
+        mean_v = float(x.mean()) if x.notna().any() else np.nan
+        std_v = float(x.std(ddof=1)) if x.notna().sum() >= 2 else np.nan
+
+        sub = _subdim_code(code)
+        q_text = inv_map.get(str(code).strip(), str(code).strip())  # 若沒有 mapping，就退回題號本身
+
+        rows.append({
+            "題號": str(code).strip(),
+            "構面": sub,
+            "問項": q_text,
+            "平均數": mean_v,
+            "標準差": std_v,
+        })
+
+    out = pd.DataFrame(rows)
+
+    # 子構面平均：以「該子構面所有題項的平均數」再取平均（常見表格寫法）
+    sub_mean_map = (
+        out.groupby("構面")["平均數"]
+        .mean()
+        .to_dict()
+    )
+    out["構面平均"] = out["構面"].map(sub_mean_map)
+
+    # 構面排序：子構面內依「平均數」由大到小排名（1=最高），整數
+    out["構面排序"] = (
+        out.groupby("構面")["平均數"]
+        .rank(method="dense", ascending=False)
+        .astype("Int64")
+    )
+
+    # 題號排序
+    out = out.sort_values(by="題號", key=lambda s: s.map(_item_sort_key)).reset_index(drop=True)
+
+    # 格式化（四位小數；構面排序整數）
+    out["平均數"] = out["平均數"].map(lambda v: f"{v:.4f}" if np.isfinite(v) else "")
+    out["標準差"] = out["標準差"].map(lambda v: f"{v:.4f}" if np.isfinite(v) else "")
+    out["構面平均"] = out["構面平均"].map(lambda v: f"{v:.4f}" if np.isfinite(v) else "")
+    out["構面排序"] = out["構面排序"].astype(str).replace({"<NA>": ""})
+
+    return out
+
 
 def _find_profile_cols(df_raw: pd.DataFrame, df_norm: pd.DataFrame) -> list[str]:
     """
@@ -1028,6 +1124,33 @@ try:
     except Exception as e:
         st.error("區別效度分析失敗（safe）")
         safe_show_exception(e)
+
+    # =========================================================
+    # ✅ 3.4️⃣ 構面現況分析表（題號/構面/問項/平均數/標準差/構面排序/構面平均）
+    # =========================================================
+    st.divider()
+    st.subheader("📋 構面現況分析表")
+
+    try:
+        item_status_df = build_item_status_table(df_raw=df_raw, df_norm=df_norm, mapping=mapping)
+
+        if item_status_df.empty:
+            st.info("找不到題項代碼欄位，無法產生構面現況分析表。")
+        else:
+            st.dataframe(item_status_df, width="stretch", height=520)
+
+            st.download_button(
+                "下載 構面現況分析表 CSV",
+                data=df_to_csv_bytes(item_status_df),
+                file_name="item_status_table.csv",
+                mime="text/csv",
+            )
+
+    except Exception as e:
+        st.error("構面現況分析表失敗（safe）")
+        safe_show_exception(e)
+
+
 
     # =========================================================
     # ✅ 3.5️⃣ Independent Samples t-test（基本資料 → 構面A/B/C...）
