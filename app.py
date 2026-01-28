@@ -81,24 +81,56 @@ else:
     authentication_status = _login_ret
 
 
-if authentication_status is False:
+# ===== Login（用 st.session_state 當最終來源，避免版本差異） =====
+# 先嘗試把 login 畫面 render 出來（不管回傳格式）
+try:
+    login_ret = authenticator.login("main", "登入系統")  # 你目前這版看起來是 (location, form_name)
+except TypeError:
+    # 有些版本是 (form_name, location) 或 keyword
+    try:
+        login_ret = authenticator.login("登入系統", "main")
+    except TypeError:
+        try:
+            login_ret = authenticator.login("登入系統", location="main")
+        except TypeError:
+            login_ret = authenticator.login()
+
+# 先給預設值
+name, authentication_status, username = ("", None, "")
+
+# 兼容：login() 可能回 tuple/dict/None
+if isinstance(login_ret, tuple):
+    if len(login_ret) == 3:
+        name, authentication_status, username = login_ret
+    elif len(login_ret) == 2:
+        name, authentication_status = login_ret
+    elif len(login_ret) == 1:
+        authentication_status = login_ret[0]
+elif isinstance(login_ret, dict):
+    name = login_ret.get("name", "") or ""
+    username = login_ret.get("username", "") or ""
+    authentication_status = login_ret.get("authentication_status", None)
+
+# ✅ 關鍵：以 session_state 的結果覆蓋（很多版本只寫這裡）
+authentication_status = st.session_state.get("authentication_status", authentication_status)
+name = st.session_state.get("name", name)
+username = st.session_state.get("username", username)
+
+# Gate
+if authentication_status is True:
+    with st.sidebar:
+        try:
+            authenticator.logout("登出", "sidebar")
+        except TypeError:
+            authenticator.logout("登出")
+        st.caption(f"登入者：{name} ({username})")
+elif authentication_status is False:
     st.error("帳號或密碼錯誤")
     st.stop()
-elif authentication_status is None:
+else:
     st.warning("請先登入")
     st.stop()
 
-with st.sidebar:
-    # logout 也可能有不同簽名，做同樣兼容
-    try:
-        authenticator.logout("登出", "sidebar")
-    except TypeError:
-        try:
-            authenticator.logout("sidebar", "登出")
-        except TypeError:
-            authenticator.logout("登出")
-
-    st.caption(f"登入者：{name} ({username})")
 
 
 
