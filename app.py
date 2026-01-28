@@ -31,8 +31,8 @@ except Exception:
 
 
 # ---- Page ----
-st.set_page_config(page_title="Scale Item Analysis MVP", layout="wide")
-st.title("📊 Scale Item Analysis MVP")
+st.set_page_config(page_title="fricachai 論文統計分析專業版", layout="wide")
+st.title("📊 fricachai 論文統計分析專業版")
 
 
 # ---- Helpers ----
