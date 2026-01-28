@@ -61,15 +61,25 @@ authenticator = stauth.Authenticate(
 # ===== 3) 再登入（只呼叫一次，避免 duplicate form）=====
 def safe_login(authenticator):
     fn = authenticator.login
-    sig = inspect.signature(fn)
-    params = sig.parameters
 
-    # 有些版本是 login(form_name, location=...)
-    if "location" in params:
-        return fn("登入系統", location="main")
+    # 只允許「成功命中其中一種呼叫方式」就立刻回傳
+    # 注意：要同時 catch TypeError / ValueError，因為你前面也遇過 ValueError(location 限制)
+    for call in [
+        lambda: fn("登入系統", "main"),          # 常見： (form_name, location)
+        lambda: fn("main", "登入系統"),          # 你雲端看起來像： (location, form_name)
+        lambda: fn("登入系統"),                  # 少數：只吃 form_name
+        lambda: fn(),                            # 少數：不吃參數
+        lambda: fn(location="main"),             # 有些版才吃 keyword
+        lambda: fn("登入系統", location="main"), # 有些新版才吃 keyword
+    ]:
+        try:
+            return call()
+        except (TypeError, ValueError):
+            continue
 
-    # 你目前雲端錯誤訊息看起來是 login(location, form_name)
-    return fn("main", "登入系統")
+    # 如果所有模式都不支援，直接拋錯（讓你看到真錯誤）
+    raise RuntimeError("streamlit-authenticator.login() 介面不相容：所有呼叫模式都失敗")
+
 
 login_ret = safe_login(authenticator)
 
