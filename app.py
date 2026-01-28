@@ -35,12 +35,13 @@ st.set_page_config(page_title="fricachai 論文統計分析專業版(release 1.0
 
 import streamlit as st
 import streamlit_authenticator as stauth
+import copy
 
-# ===== Authentication =====
-auth_config = st.secrets["auth"]
+# ===== Authentication (Level B) =====
+auth_config = copy.deepcopy(dict(st.secrets["auth"]))  # ✅ 變成可寫的 dict
 
 authenticator = stauth.Authenticate(
-    credentials=auth_config["credentials"],
+    credentials=auth_config["credentials"],            # ✅ 不要用 st.secrets 直接引用
     cookie_name=auth_config["cookie_name"],
     cookie_key=auth_config["cookie_key"],
     cookie_expiry_days=auth_config["cookie_expiry_days"],
@@ -51,13 +52,15 @@ name, authentication_status, username = authenticator.login("登入系統", "mai
 if authentication_status is False:
     st.error("帳號或密碼錯誤")
     st.stop()
-
 elif authentication_status is None:
     st.warning("請先登入")
     st.stop()
 
-# authentication_status == True 才會走到這裡
-st.success(f"歡迎 {name}")
+# ✅ 登入成功才會往下跑
+with st.sidebar:
+    authenticator.logout("登出", "sidebar")
+    st.caption(f"登入者：{name} ({username})")
+
 
 
 st.title("📊 fricachai 論文統計分析專業版(release 1.0) 2026.01.28")
