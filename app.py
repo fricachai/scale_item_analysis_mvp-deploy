@@ -31,7 +31,7 @@ except Exception:
 
 
 # ---- Page ----
-st.set_page_config(page_title="fricachai 論文統計分析專業版(release 1.0) 2026.01.28 ", layout="wide")
+st.set_page_config(page_title="柴康偉 論文統計分析專業版(release 1.0) 2026.01.28 ", layout="wide")
 
 
 import streamlit as st
