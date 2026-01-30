@@ -1330,7 +1330,7 @@ try:
                         mime="text/csv",
                     )
 
-        except Exception as e:
+    except Exception as e:
                 st.error("樣本基本資料分析表失敗（safe）")
                 safe_show_exception(e)    
 
