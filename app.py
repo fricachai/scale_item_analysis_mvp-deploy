@@ -1504,12 +1504,12 @@ else:
     if iv_w and w_var and dv_w:
         st.success(f"干擾模型：{iv_w} → {dv_w}（W={w_var}）")
 
-        st.markdown("### 研究用資料表（僅保留 IV / W / DV）")
+        st.markdown("### 研究用資料表（僅保留 IV / Mo / DV）")
         df_moderation = df_raw_plus_dimmeans[[iv_w, w_var, dv_w]].copy()
         st.dataframe(df_moderation, width="stretch")
 
         st.download_button(
-            "下載 干擾分析研究用資料 CSV（IV + W + DV）",
+            "下載 干擾分析研究用資料 CSV（IV + Mo + DV）",
             data=df_to_csv_bytes(df_moderation),
             file_name=f"moderation_dataset_{iv_w}_{w_var}_{dv_w}.csv",
             mime="text/csv",
@@ -1521,7 +1521,7 @@ else:
             try:
                 mod_table, mod_meta = build_moderation_paper_table(df_raw_plus_dimmeans, iv=iv_w, mod=w_var, dv=dv_w)
 
-                st.markdown(f"### 干擾變數（{w_var}）對 自變數（{iv_w}）與 依變數（{dv_w}）之干擾分析表")
+                st.markdown(f"### 干擾變數({w_var}) 對 自變數({iv_w}) 與 依變數 ({dv_w}) 之干擾分析表")
                 st.dataframe(mod_table, width="stretch")
                 st.caption("註：* P<0.05，** P<0.01，*** P<0.001；ΔR² 為 R² 變化量（R² change）。")
 
@@ -1540,7 +1540,7 @@ else:
                 safe_show_exception(e)
 
     else:
-        st.info("請依序選擇 IV / W / DV（且三者不可重複）後，才會顯示干擾分析資料與結果。")
+        st.info("請依序選擇 IV / Mo / DV（且三者不可重複）後，才會顯示干擾分析資料與結果。")
 
 
 # ---- GPT report (optional) ----
