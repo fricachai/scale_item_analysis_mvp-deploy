@@ -1491,7 +1491,7 @@ with col1:
 
 mod_options = [""] + [c for c in dim_cols if c != iv_w]
 with col2:
-    w_var = st.selectbox("② 干擾變數（W）", options=mod_options, index=0, key="mod_w")
+    w_var = st.selectbox("② 干擾變數(Mo)", options=mod_options, index=0, key="mod_w")
 
 dv_options2 = [""] + [c for c in dim_cols if c not in {iv_w, w_var}]
 with col3:
