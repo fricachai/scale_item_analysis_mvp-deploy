@@ -848,6 +848,79 @@ def _find_profile_cols(df_raw: pd.DataFrame, df_norm: pd.DataFrame) -> list[str]
 
     return profile_cols
 
+def _find_profile_cols_left_of_items(df_raw: pd.DataFrame, mapping: dict) -> list[str]:
+    """
+    ✅ 抓「A11 問項左邊所有的個人基本資料欄位」（以 df_raw 欄位順序為準）
+    - mapping 的 key 是原始欄名（通常是中文題目），value 是題項代碼（A11...）
+    - 找到第一個題項欄位在 df_raw 的位置，取其左邊所有欄位作為基本資料
+    - 自動排除 Unnamed 欄位
+    """
+    cols = list(df_raw.columns)
+
+    # 沒 mapping 就退回舊方法（保底）
+    if not isinstance(mapping, dict) or not mapping:
+        out = [c for c in cols if not str(c).strip().startswith("Unnamed")]
+        return out
+
+    raw_item_cols = [k for k in mapping.keys() if k in df_raw.columns]
+    if not raw_item_cols:
+        out = [c for c in cols if not str(c).strip().startswith("Unnamed")]
+        return out
+
+    # 找出最早出現的題項欄位位置（例如 A11 對應的那個中文題目欄位）
+    idxs = [cols.index(k) for k in raw_item_cols]
+    first_item_idx = min(idxs)
+
+    profile_cols = cols[:first_item_idx]
+    profile_cols = [c for c in profile_cols if not str(c).strip().startswith("Unnamed")]
+    return profile_cols
+
+
+def build_sample_profile_table(df_raw: pd.DataFrame, mapping: dict) -> tuple[pd.DataFrame, int]:
+    """
+    ✅ 生成「樣本基本資料分析表」
+    欄位：項目 / 樣本數 / 百分比(%) / 累積百分比(%)
+    呈現：每個基本資料變項下列出其類別與數值（類似你第三張截圖）
+    """
+    profile_cols = _find_profile_cols_left_of_items(df_raw, mapping=mapping)
+
+    # N：以「有上傳的資料列數」為主（如果你要改成排除整列空白再算 N，也可再加規則）
+    N = int(len(df_raw))
+
+    rows = []
+    for col in profile_cols:
+        s = df_raw[col].copy()
+
+        # 清理空白與 NaN
+        s = s.astype(str).str.strip()
+        s = s.replace({"": np.nan, "nan": np.nan, "None": np.nan})
+        s = s.dropna()
+
+        if s.empty:
+            continue
+
+        vc = s.value_counts(dropna=True)
+        total = int(vc.sum())
+        if total == 0:
+            continue
+
+        cum = 0.0
+        first = True
+        for cat, cnt in vc.items():
+            pct = (int(cnt) / total) * 100.0
+            cum += pct
+
+            rows.append({
+                "項目": str(col) if first else "",        # 模擬合併儲存格：只在第一列顯示項目名
+                "類別": str(cat),
+                "樣本數": int(cnt),
+                "百分比(%)": round(pct, 1),
+                "累積百分比(%)": round(cum, 1),
+            })
+            first = False
+
+    out = pd.DataFrame(rows, columns=["項目", "類別", "樣本數", "百分比(%)", "累積百分比(%)"])
+    return out, N
 
 def build_independent_ttest_table(
     df: pd.DataFrame,
@@ -1232,6 +1305,34 @@ try:
         st.error("構面現況分析表失敗（safe）")
         safe_show_exception(e)
 
+    # =========================================================
+    # ✅ 3.4.1️⃣ 樣本基本資料分析表（A11 左邊基本資料欄位）
+    # （放在：構面現況分析表下載後面、t 檢定前面）
+    # =========================================================
+    st.divider()
+
+    # ✅ 標題要完全照你指定
+    # N = 填答問卷的筆數
+    try:
+        sample_profile_df, N_profile = build_sample_profile_table(df_raw=df_raw, mapping=mapping)
+
+        st.subheader(f"樣本基本資料分析表(N={N_profile})")
+
+        if sample_profile_df.empty:
+                    st.info("找不到可用的基本資料欄位（A11 左側欄位）或資料皆為空。")
+        else:
+                    st.dataframe(sample_profile_df, width="stretch", height=520)
+
+                    st.download_button(
+                        "下載 樣本基本資料分析表 CSV",
+                        data=df_to_csv_bytes(sample_profile_df),
+                        file_name="sample_profile_table.csv",
+                        mime="text/csv",
+                    )
+
+        except Exception as e:
+                st.error("樣本基本資料分析表失敗（safe）")
+                safe_show_exception(e)    
 
 
     # =========================================================
