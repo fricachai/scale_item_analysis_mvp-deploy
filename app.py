@@ -1418,20 +1418,20 @@ dim_cols_all = dim_cols
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    iv_m = st.selectbox("① 自變數（IV）", options=[""] + dim_cols_all, index=0, key="med_iv")
+    iv_m = st.selectbox("① 自變數(IV)", options=[""] + dim_cols_all, index=0, key="med_iv")
 
 with col2:
     med_options = [""] + [c for c in dim_cols_all if c != iv_m]
-    med_m = st.selectbox("② 中介變數（M）", options=med_options, index=0, key="med_m")
+    med_m = st.selectbox("② 中介變數(Me)", options=med_options, index=0, key="med_m")
 
 with col3:
     dv_options = [""] + [c for c in dim_cols_all if c not in {iv_m, med_m}]
-    dv_m = st.selectbox("③ 依變數（DV）", options=dv_options, index=0, key="med_dv")
+    dv_m = st.selectbox("③ 依變數(DV)", options=dv_options, index=0, key="med_dv")
 
 chosen = [x for x in [iv_m, med_m, dv_m] if x]
 
 if len(chosen) != len(set(chosen)):
-    st.error("⚠️ IV / M / DV 不可重複，A、B、C、D… 每個只能出現在一個角色中。")
+    st.error("⚠️ IV / Me / DV 不可重複，A、B、C、D… 每個只能出現在一個角色中。")
 
 elif iv_m and med_m and dv_m:
     st.success(f"中介模型：{iv_m} → {med_m} → {dv_m}")
@@ -1455,7 +1455,7 @@ elif iv_m and med_m and dv_m:
         try:
             paper_table, meta = build_mediation_paper_table(df_raw_plus_dimmeans, iv=iv_m, med=med_m, dv=dv_m)
 
-            st.markdown(f"### 中介變數（{med_m}）對 自變數（{iv_m}）與 依變數（{dv_m}）之中介分析表")
+            st.markdown(f"### 中介變數({med_m}) 對 自變數({iv_m}) 與 依變數({dv_m})之中介分析表")
             st.dataframe(paper_table, width="stretch")
 
             st.caption("註：* P<0.05，** P<0.01，*** P<0.001；ΔR² 為調整後 R²（Adj R²）；D-W 為 Durbin–Watson。")
