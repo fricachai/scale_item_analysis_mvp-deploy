@@ -690,8 +690,11 @@ def build_moderation_paper_table(df: pd.DataFrame, iv: str, mod: str, dv: str):
 
 def build_discriminant_validity_table(df_norm: pd.DataFrame, item_df: pd.DataFrame):
     """
-    區別效度分析表（改進版：採 Pairwise Deletion 以對齊 JASP）
+    區別效度分析表（清理版：移除 U+00A0 隱形字元，採用 Pairwise Deletion）
     """
+    import re
+    from scipy.stats import pearsonr
+
     sub_alpha = (
         item_df.groupby("子構面")["該子構面整體 α"]
         .first()
@@ -700,10 +703,10 @@ def build_discriminant_validity_table(df_norm: pd.DataFrame, item_df: pd.DataFra
     )
 
     sub_dims = sorted(sub_alpha.keys())
-
     sub_scores = {}
+
     for sd in sub_dims:
-        # 修正：確保只抓取 A11, A12 這種題項，避免抓到名稱類似的計算後欄位
+        # 使用正則表達式精確抓取題項（例如 A11, A12...），排除非題項欄位
         cols = [c for c in df_norm.columns if isinstance(c, str) and re.match(rf"^{sd}\d+", c)]
         if cols:
             sub_scores[sd] = (
@@ -712,9 +715,8 @@ def build_discriminant_validity_table(df_norm: pd.DataFrame, item_df: pd.DataFra
                 .mean(axis=1)
             )
 
-    # 【關鍵修改 1】：這裡不再執行全域 dropna()，保留原始各構面分數
+    # 建立構面分數表，此處保留原始資料（包含 NaN）以利後續 Pairwise 計算
     score_df = pd.DataFrame(sub_scores)
-
     mat = pd.DataFrame("", index=sub_dims, columns=sub_dims)
 
     for i, r in enumerate(sub_dims):
@@ -725,16 +727,16 @@ def build_discriminant_validity_table(df_norm: pd.DataFrame, item_df: pd.DataFra
                 except Exception:
                     mat.loc[r, c] = str(sub_alpha[r])
             elif i > j:
-                # 【關鍵修改 2】：針對特定一對變數 (r, c) 進行成對刪除缺失值
-                # 這樣計算出的相關係數與樣本數 N 會與 JASP 預設一致
+                # 執行 Pairwise Deletion：針對當前這對變數排除缺失值
                 valid_pair = score_df[[r, c]].dropna()
                 
                 if len(valid_pair) > 2:
-                    r_val, p_val = pearsonr(valid_pair[r], valid_pair[c])  
+                    # 計算 Pearson 相關係數，這將與 JASP 的預設結果對齊
+                    r_val, p_val = pearsonr(valid_pair[r], valid_pair[c])
                     star = "**" if p_val < 0.01 else ""
                     mat.loc[r, c] = f"{r_val:.4f}{star}"
                 else:
-                    mat.loc[r, c] = "N/A" # 資料量太少無法計算
+                    mat.loc[r, c] = "N/A"
             else:
                 mat.loc[r, c] = ""
 
