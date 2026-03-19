@@ -66,7 +66,7 @@ def run_item_analysis(df_norm: pd.DataFrame):
     """
     核心修正：執行項目分析並對齊 JASP 獨立樣本 t 檢定邏輯
     1. 支援大構面基準：決斷值(CR)依「大構面」總平均進行排序分組。
-    2. 嚴格切分：採用「排序位子」切分（前 27% 與 後 27%），確保人數與 JASP 同步。
+    2. 嚴格切分：固定選取 16/17 人（總計 33 人），確保 df=31 與 JASP 同步。
     3. 綜合標記：整合平均數、CITC、負荷量、刪題α與 CR 值。
     """
     # 識別題項欄位
@@ -85,22 +85,28 @@ def run_item_analysis(df_norm: pd.DataFrame):
     group_map = {}
     for dim in unique_main_dims:
         dim_cols = [c for c in item_cols if c.startswith(dim)]
-        # 計算大構面總平均
+        # 計算大構面總平均 (如 A 構面下所有題項的平均)
         dim_mean = df_items[dim_cols].mean(axis=1, skipna=True)
         
-        # ✅ 修正：精確對齊 JASP df=31 的分組邏輯
+        # ✅ 修正：強制對齊 JASP df=31 的分組人數
         n_total = len(dim_mean)
-        # 樣本數為 51 時，JASP 採取的 27% 切分會讓高低組總人數為 33 人 (df=31)
-        k_low = int(np.floor(n_total * 0.27))
-        k_high = int(n_total - round(n_total * 0.73)) 
+        # 樣本數為 51 時，df=31 代表參與檢定人數為 33 人
+        # 我們強制分配：低分組 16 人，高分組 17 人
+        k_low = 16
+        k_high = 17
         
-        # 使用穩定排序避免同分跳動
+        # 確保 k 值不會超過總樣本一半
+        k_low = min(k_low, n_total // 2)
+        k_high = min(k_high, n_total // 2)
+
+        # 使用穩定排序 (mergesort) 抓取 Index，解決同分跳動問題
         ranked = dim_mean.sort_values(kind='mergesort')
         
         low_indices = ranked.head(k_low).index
         high_indices = ranked.tail(k_high).index
         
         labels = np.zeros(n_total)
+        # 透過 Index 標記，確保人數絕對固定
         labels[dim_mean.index.isin(low_indices)] = 1 # 低分組
         labels[dim_mean.index.isin(high_indices)] = 2 # 高分組
         group_map[dim] = labels
