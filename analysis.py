@@ -45,8 +45,8 @@ def calculate_cronbach_alpha(df: pd.DataFrame):
 def run_item_analysis(df_norm: pd.DataFrame):
     """
     核心修正：對齊 JASP 獨立樣本 t 檢定邏輯
-    1. 分組基準：大構面平均。
-    2. 切分邏輯：排除插值誤差，直接採用排序後的樣本個數切分 (27% / 73%)。
+    1. 分組基準：按「大構面 (A, B...)」所有題項平均後的總分排序。
+    2. 切分邏輯：排除插值誤差，直接採用排序後的樣本個數切分 (前 27% 與 後 27%)。
     3. 格式：CR值與 p 值嚴格四捨五入至四位。
     """
     ITEM_CODE_RE = re.compile(r"^[A-Za-z]\d{1,3}(_\d+)?$")
@@ -58,19 +58,25 @@ def run_item_analysis(df_norm: pd.DataFrame):
     df_items = df_norm[item_cols].apply(pd.to_numeric, errors='coerce')
     unique_main_dims = sorted(list(set([c[0].upper() for c in item_cols])))
     
+    # --- 預先計算每個大構面的高低分組標籤 ---
     group_map = {}
     for dim in unique_main_dims:
         dim_cols = [c for c in item_cols if c.startswith(dim)]
+        # 計算該大構面 (例如 A11~A24) 的平均數
         dim_mean = df_items[dim_cols].mean(axis=1, skipna=True)
         
-        # --- 修正分組邏輯：改用排序位置切分而非數值分位 ---
+        # 修正分組邏輯：改用「排序位子」切分，而非「分數分位數」
         n = len(dim_mean)
-        k = int(round(n * 0.27)) # 取得 27% 的樣本個數
+        k = int(round(n * 0.27)) # 計算前 27% 的樣本個數
         
+        # 排序所有填答者的構面平均分
         sorted_means = dim_mean.sort_values()
+        
+        # 取得邊界值（直接取排序後第 k 名的分數）
         low_threshold = sorted_means.iloc[k-1] if k > 0 else -np.inf
         high_threshold = sorted_means.iloc[-k] if k > 0 else np.inf
         
+        # 標記高低分組（排除中間者）
         labels = np.zeros(n)
         labels[dim_mean <= low_threshold] = 1 # 低分組
         labels[dim_mean >= high_threshold] = 2 # 高分組
@@ -82,20 +88,20 @@ def run_item_analysis(df_norm: pd.DataFrame):
         sub_dim = col[:2].upper()
         col_data = df_items[col]
         
-        # CR值計算
+        # 決斷值 (CR) 計算
         labels = group_map[main_dim]
         low_vals = col_data[labels == 1].dropna()
         high_vals = col_data[labels == 2].dropna()
         
         if len(low_vals) > 1 and len(high_vals) > 1:
-            # 採用 Student t-test (等變異)
+            # 執行 Student's t-test (等變異)
             t_stat, p_val = ttest_ind(high_vals, low_vals, equal_var=True)
             cr_value = abs(t_stat)
             cr_p = p_val
         else:
             cr_value, cr_p = np.nan, np.nan
 
-        # CITC 與其他指標
+        # CITC、Alpha 等其他指標
         sub_cols = [c for c in item_cols if c.startswith(sub_dim)]
         if len(sub_cols) > 1:
             sub_sum = df_items[sub_cols].sum(axis=1)
