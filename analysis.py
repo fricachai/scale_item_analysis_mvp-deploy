@@ -44,9 +44,10 @@ def calculate_cronbach_alpha(df: pd.DataFrame):
 
 def run_item_analysis(df_norm: pd.DataFrame):
     """
-    執行項目分析核心邏輯：
-    1. 決斷值 (CR) 分組：修正為使用 rank 比例切分，對齊 JASP 邏輯。
-    2. 數值處理：決斷值與 p 值強制四捨五入至第四位。
+    核心修正：對齊 JASP 獨立樣本 t 檢定邏輯
+    1. 分組基準：大構面平均。
+    2. 切分邏輯：排除插值誤差，直接採用排序後的樣本個數切分 (27% / 73%)。
+    3. 格式：CR值與 p 值嚴格四捨五入至四位。
     """
     ITEM_CODE_RE = re.compile(r"^[A-Za-z]\d{1,3}(_\d+)?$")
     item_cols = [c for c in df_norm.columns if ITEM_CODE_RE.match(str(c))]
@@ -55,48 +56,46 @@ def run_item_analysis(df_norm: pd.DataFrame):
         return pd.DataFrame()
 
     df_items = df_norm[item_cols].apply(pd.to_numeric, errors='coerce')
-    
-    # 識別大構面 (A, B...)
     unique_main_dims = sorted(list(set([c[0].upper() for c in item_cols])))
     
-    # --- [核心修正：高低分組切分邏輯] ---
     group_map = {}
     for dim in unique_main_dims:
         dim_cols = [c for c in item_cols if c.startswith(dim)]
-        # 計算大構面平均 (例如 A11~A24 之平均)
         dim_mean = df_items[dim_cols].mean(axis=1, skipna=True)
         
-        # 使用百分比排名來決定高低分組，避免 quantile 插值造成的誤差
-        # 這是最接近 SPSS/JASP 處理離散分數的方法
-        ranks = dim_mean.rank(pct=True, method='min')
+        # --- 修正分組邏輯：改用排序位置切分而非數值分位 ---
+        n = len(dim_mean)
+        k = int(round(n * 0.27)) # 取得 27% 的樣本個數
         
-        labels = np.zeros(len(dim_mean))
-        labels[ranks <= 0.27] = 1 # 低分組
-        labels[ranks > 0.73] = 2  # 高分組 (大於 73% 位數)
+        sorted_means = dim_mean.sort_values()
+        low_threshold = sorted_means.iloc[k-1] if k > 0 else -np.inf
+        high_threshold = sorted_means.iloc[-k] if k > 0 else np.inf
+        
+        labels = np.zeros(n)
+        labels[dim_mean <= low_threshold] = 1 # 低分組
+        labels[dim_mean >= high_threshold] = 2 # 高分組
         group_map[dim] = labels
 
     results = []
-    
     for col in item_cols:
         main_dim = col[0].upper()
         sub_dim = col[:2].upper()
         col_data = df_items[col]
         
-        # 1. 決斷值 (CR) 計算：執行 Student's t 檢定
+        # CR值計算
         labels = group_map[main_dim]
         low_vals = col_data[labels == 1].dropna()
         high_vals = col_data[labels == 2].dropna()
         
         if len(low_vals) > 1 and len(high_vals) > 1:
-            # 執行 Student's t-test
+            # 採用 Student t-test (等變異)
             t_stat, p_val = ttest_ind(high_vals, low_vals, equal_var=True)
-            # 強制四捨五入至四位
-            cr_value = f"{abs(t_stat):.4f}"
-            cr_p_str = f"{p_val:.4f}"
+            cr_value = abs(t_stat)
+            cr_p = p_val
         else:
-            cr_value, cr_p_str = "", ""
+            cr_value, cr_p = np.nan, np.nan
 
-        # 2. CITC 與 Alpha (子構面基準)
+        # CITC 與其他指標
         sub_cols = [c for c in item_cols if c.startswith(sub_dim)]
         if len(sub_cols) > 1:
             sub_sum = df_items[sub_cols].sum(axis=1)
@@ -107,7 +106,6 @@ def run_item_analysis(df_norm: pd.DataFrame):
         else:
             citc, alpha_del, overall_alpha = np.nan, np.nan, np.nan
 
-        # 3. 因素負荷量 (相關係數法)
         loading = col_data.corr(df_items[sub_cols].mean(axis=1))
 
         results.append({
@@ -121,8 +119,8 @@ def run_item_analysis(df_norm: pd.DataFrame):
             "刪除後 Cronbach α": round(alpha_del, 4) if not np.isnan(alpha_del) else "—",
             "該子構面整體 α": round(overall_alpha, 4) if not np.isnan(overall_alpha) else "—",
             "警示標記": "刪題α↑" if (not np.isnan(alpha_del) and alpha_del > overall_alpha) else "—",
-            "決斷值(CR: Critical Ratio)": cr_value,
-            "CR_p值": cr_p_str
+            "決斷值(CR: Critical Ratio)": round(cr_value, 4) if not np.isnan(cr_value) else "",
+            "CR_p值": f"{cr_p:.4f}" if not np.isnan(cr_p) else ""
         })
 
     return pd.DataFrame(results)
