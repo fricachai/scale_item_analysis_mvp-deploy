@@ -1,252 +1,135 @@
-# analysis.py
-import re
-import numpy as np
+# -*- coding: utf-8 -*-
 import pandas as pd
-from scipy import stats
-
-# ✅ 支援欄名：
-# - A11
-# - A01.題目
-# - A01 題目
-# - A01題目（代碼後直接接中文字，也要能抓到）
-CODE_RE_PLAIN = re.compile(r"^[A-Za-z]\d{2,3}$")
-CODE_RE_FROM_TEXT = re.compile(r"^([A-Za-z]\d{2,3})(?:[\.、\s]|(?=[^\d]))")  # ★放寬：.、空白、或後面接非數字(中文字)
-
+import numpy as np
+import re
+from scipy.stats import ttest_ind
 
 def normalize_item_columns(df: pd.DataFrame):
     """
-    將欄名正規化成純代碼（A01/A11/A101...），並回傳 mapping：原欄名 -> 代碼
-    若同代碼重複，會加 _2 _3...
+    正規化欄位名稱：偵測如 A11, B12 等格式，並建立映射表。
     """
+    ITEM_CODE_RE = re.compile(r"^[A-Za-z]\d{1,3}(_\d+)?$")
     mapping = {}
-    used = set()
     new_cols = []
-
+    
     for col in df.columns:
         s = str(col).strip()
-        code = None
-
-        if CODE_RE_PLAIN.match(s):
-            code = s
-        else:
-            m = CODE_RE_FROM_TEXT.match(s)
-            if m:
-                code = m.group(1)
-
-        if code is None:
+        if ITEM_CODE_RE.match(s):
             new_cols.append(s)
-            continue
-
-        base = code
-        k = 2
-        while code in used:
-            code = f"{base}_{k}"
-            k += 1
-
-        used.add(code)
-        mapping[s] = code
-        new_cols.append(code)
-
+        else:
+            match = re.search(r"([A-Za-z]\d{1,3})", s)
+            if match:
+                code = match.group(1).upper()
+                mapping[col] = code
+                new_cols.append(code)
+            else:
+                new_cols.append(col)
+                
     df_norm = df.copy()
     df_norm.columns = new_cols
     return df_norm, mapping
 
-
-def _find_item_cols(df: pd.DataFrame):
-    # 允許 A01 / A11 / A101 / A11_2
-    return [c for c in df.columns if re.match(r"^[A-Za-z]\d{2,3}(_\d+)?$", str(c).strip())]
-
-
-def _parse_dim_and_subdim(code: str):
+def calculate_cronbach_alpha(df: pd.DataFrame):
     """
-    子構面只要「左邊兩碼」：A0 / A1 / B3 ...
-    - A01 -> A0
-    - A11 -> A1
-    - A101 -> A1（仍取第一個數字）
+    計算 Cronbach's Alpha (用於項目分析中的刪除後信度)
     """
-    m = re.match(r"^([A-Za-z])(\d{2,3})", str(code).strip())
-    if not m:
-        return None, None
-    dim = m.group(1).upper()
-    first_digit = m.group(2)[0]  # 只取左邊第一位數字
-    subdim = f"{dim}{first_digit}"
-    return dim, subdim
+    df = df.dropna()
+    if df.shape[1] <= 1: return 0.0
+    item_vars = df.var(ddof=1)
+    total_var = df.sum(axis=1).var(ddof=1)
+    k = df.shape[1]
+    if total_var == 0: return 0.0
+    alpha = (k / (k - 1)) * (1 - item_vars.sum() / total_var)
+    return alpha
 
-
-def cronbach_alpha(df_items: pd.DataFrame) -> float:
-    x = df_items.to_numpy(dtype=float)
-    x = x[~np.isnan(x).all(axis=1)]  # 移除全空列
-    k = x.shape[1]
-    if k < 2:
-        return np.nan
-    item_var = np.nanvar(x, axis=0, ddof=1)
-    total = np.nansum(x, axis=1)
-    total_var = np.nanvar(total, ddof=1)
-    if total_var == 0:
-        return np.nan
-    return (k / (k - 1)) * (1 - np.nansum(item_var) / total_var)
-
-
-def citc(df_items: pd.DataFrame, col: str) -> float:
-    x = df_items.astype(float)
-    item = x[col]
-    total_ex = x.drop(columns=[col]).sum(axis=1, skipna=True)
-    if item.nunique(dropna=True) <= 1 or total_ex.nunique(dropna=True) <= 1:
-        return np.nan
-    return float(item.corr(total_ex))
-
-
-def pca_single_loading_abs(df_items: pd.DataFrame, col: str) -> float:
+def run_item_analysis(df_norm: pd.DataFrame):
     """
-    ✅ 不用 sklearn
-    單因子 loading：以「第一主成分分數」與「各題標準化分數」的相關（取絕對值）
-    → 結果一定非負（符合你「因素負荷量不要負的」）
+    核心修正：執行項目分析
+    1. CR值：以「大構面 (A, B...)」總平均之 27/73 百分位數分組。
+    2. t 檢定：針對每一題項進行獨立樣本 t 檢定。
     """
-    x = df_items.apply(pd.to_numeric, errors="coerce").astype(float)
-
-    # 至少要有足夠資料
-    x2 = x.dropna()
-    if x2.shape[0] < 3 or x2.shape[1] < 2:
-        return np.nan
-
-    # 標準化
-    std = x2.std(ddof=0)
-    std[std == 0] = np.nan
-    z = (x2 - x2.mean()) / std
-    z = z.dropna(axis=1, how="any")  # 去掉常數欄造成的 nan
-    if col not in z.columns or z.shape[1] < 2:
-        return np.nan
-
-    # 第一主成分方向（用 SVD 取得第一主軸）
-    # z = U S Vt, 第一主成分分數 ~ U[:,0]*S[0] = z @ V[:,0]
-    try:
-        _, _, vt = np.linalg.svd(z.to_numpy(), full_matrices=False)
-    except np.linalg.LinAlgError:
-        return np.nan
-
-    v1 = vt[0, :]  # 第一主軸
-    pc1 = z.to_numpy() @ v1  # 第一主成分分數
-
-    # loading = corr(z[col], pc1)
-    item_z = z[col].to_numpy()
-    if np.nanstd(item_z) == 0 or np.nanstd(pc1) == 0:
-        return np.nan
-
-    r = np.corrcoef(item_z, pc1)[0, 1]
-    if np.isnan(r):
-        return np.nan
-    return float(abs(r))
-
-
-def discrimination_t(df_items: pd.DataFrame, col: str, q_low=0.27, q_high=0.73):
-    """
-    以「子構面總分」做高低分組，再對單一題做 Welch t-test
-    """
-    x = df_items.apply(pd.to_numeric, errors="coerce").astype(float)
-    total = x.sum(axis=1, skipna=True)
-
-    low_cut = total.quantile(q_low)
-    high_cut = total.quantile(q_high)
-
-    low = x.loc[total <= low_cut, col].dropna()
-    high = x.loc[total >= high_cut, col].dropna()
-
-    if len(low) < 2 or len(high) < 2:
-        return np.nan, np.nan
-
-    t, p = stats.ttest_ind(high, low, equal_var=False, nan_policy="omit")
-    return float(t), float(p)
-
-
-def fmt(x, n: int) -> str:
-    """
-    ✅ 固定小數位顯示；就算是整數也補 0
-    ✅ NaN 顯示空字串（避免 Streamlit 顯示 None）
-    """
-    if x is None or (isinstance(x, float) and np.isnan(x)):
-        return ""
-    try:
-        return f"{float(x):.{n}f}"
-    except Exception:
-        return ""
-
-
-def run_item_analysis(df: pd.DataFrame) -> pd.DataFrame:
-    item_cols = _find_item_cols(df)
+    ITEM_CODE_RE = re.compile(r"^[A-Za-z]\d{1,3}(_\d+)?$")
+    item_cols = [c for c in df_norm.columns if ITEM_CODE_RE.match(str(c))]
+    
     if not item_cols:
-        raise ValueError("找不到符合「字母+數字」命名的題項欄位（如 A11 / A01 / A01題目）。請先用 normalize_item_columns 正規化欄名。")
+        return pd.DataFrame()
 
-    df_items_all = df[item_cols].copy()
+    # 轉為數值格式
+    df_items = df_norm[item_cols].apply(pd.to_numeric, errors='coerce')
+    
+    # 識別所有大構面 (例如 A, B, C...)
+    unique_main_dims = sorted(list(set([c[0].upper() for c in item_cols])))
+    
+    # --- [關鍵修正：預先計算大構面的高低分組標籤] ---
+    group_map = {}
+    for dim in unique_main_dims:
+        # 找出屬於該大構面的所有題項 (A 構面包含 A11~A24)
+        dim_cols = [c for c in item_cols if c.startswith(dim)]
+        # 計算大構面總平均 (軸心邏輯：A 構面下所有題目的平均)
+        dim_mean = df_items[dim_cols].mean(axis=1, skipna=True)
+        
+        # 取得 27% 與 73% 的切分點
+        low_q = dim_mean.quantile(0.27)
+        high_q = dim_mean.quantile(0.73)
+        
+        # 標記：1=低分組, 2=高分組, 0=中間組
+        labels = np.zeros(len(dim_mean))
+        labels[dim_mean <= low_q] = 1
+        labels[dim_mean >= high_q] = 2
+        group_map[dim] = labels
 
-    # 依 dim/subdim 分群（只算一次，不要每題重算）
-    groups = {}
-    for c in item_cols:
-        dim, subdim = _parse_dim_and_subdim(c)
-        if dim is None:
-            continue
-        groups.setdefault((dim, subdim), []).append(c)
+    results = []
+    
+    # --- 逐題計算統計量 ---
+    for col in item_cols:
+        main_dim = col[0].upper()
+        sub_dim = col[:2].upper()
+        
+        col_data = df_items[col]
+        
+        # 1. 決斷值 (CR) 計算
+        labels = group_map[main_dim]
+        low_vals = col_data[labels == 1].dropna()
+        high_vals = col_data[labels == 2].dropna()
+        
+        if len(low_vals) > 1 and len(high_vals) > 1:
+            # 執行獨立樣本 t 檢定 (Student t-test)
+            t_stat, p_val = ttest_ind(high_vals, low_vals, equal_var=True)
+            cr_value = abs(t_stat)
+            cr_p = p_val
+        else:
+            cr_value, cr_p = np.nan, np.nan
+            
+        # 2. CITC 與 刪除後 Alpha (以子構面 A1, A2... 為單位)
+        sub_cols = [c for c in item_cols if c.startswith(sub_dim)]
+        if len(sub_cols) > 1:
+            # CITC
+            sub_sum = df_items[sub_cols].sum(axis=1)
+            corrected_sum = sub_sum - col_data.fillna(0)
+            citc = col_data.corr(corrected_sum)
+            # 刪除後 Alpha
+            alpha_del = calculate_cronbach_alpha(df_items[sub_cols].drop(columns=[col]))
+            # 整體 Alpha
+            overall_alpha = calculate_cronbach_alpha(df_items[sub_cols])
+        else:
+            citc, alpha_del, overall_alpha = np.nan, np.nan, np.nan
 
-    rows = []
-    for (dim, subdim), cols in groups.items():
-        df_sub = df_items_all[cols].apply(pd.to_numeric, errors="coerce").astype(float)
+        # 3. 因素負荷量 (簡單主成分估算)
+        loading = col_data.corr(df_items[sub_cols].mean(axis=1))
 
-        alpha_total = cronbach_alpha(df_sub)
+        results.append({
+            "構面": main_dim,
+            "子構面": sub_dim,
+            "題項": col,
+            "平均數": round(col_data.mean(), 4),
+            "標準差": round(col_data.std(), 4),
+            "CITC": round(citc, 4) if not np.isnan(citc) else "—",
+            "因素負荷量": round(loading, 4) if not np.isnan(loading) else "—",
+            "刪除後 Cronbach α": round(alpha_del, 4) if not np.isnan(alpha_del) else "—",
+            "該子構面整體 α": round(overall_alpha, 4) if not np.isnan(overall_alpha) else "—",
+            "警示標記": "刪題α↑" if (not np.isnan(alpha_del) and alpha_del > overall_alpha) else "—",
+            "決斷值(CR: Critical Ratio)": round(cr_value, 4) if not np.isnan(cr_value) else "",
+            "CR_p值": f"{cr_p:.4f}" if not np.isnan(cr_p) else ""
+        })
 
-        # 先算這個子構面每一題 loading（非負）
-        loadings = {c: pca_single_loading_abs(df_sub, c) for c in cols}
-
-        for c in cols:
-            item = pd.to_numeric(df_sub[c], errors="coerce")
-
-            mean = item.mean(skipna=True)
-            sd = item.std(skipna=True, ddof=1)
-
-            citc_v = citc(df_sub, c)
-            loading = loadings.get(c, np.nan)
-
-            alpha_if = cronbach_alpha(df_sub.drop(columns=[c])) if df_sub.shape[1] >= 2 else np.nan
-            t, p = discrimination_t(df_sub, c)
-
-            warn = []
-            if np.isfinite(citc_v) and citc_v < 0.30:
-                warn.append("CITC<.30")
-            if np.isfinite(loading) and loading < 0.50:
-                warn.append("loading<.50")
-            if np.isfinite(alpha_total) and np.isfinite(alpha_if) and alpha_if > alpha_total:
-                warn.append("刪題α↑")
-
-            rows.append({
-                "構面": dim,
-                "子構面": subdim,  # ✅ A0/A1/...
-                "題項": c,
-
-                # ✅ 固定小數位（你指定的）
-                "平均數": fmt(mean, 3),
-                "標準差": fmt(sd, 4),
-                "CITC": fmt(citc_v, 4),
-                "因素負荷量": fmt(loading, 4),
-                "刪除後 Cronbach α": fmt(alpha_if, 4),
-                "該子構面整體 α": fmt(alpha_total, 4),
-
-                "警示標記": "；".join(warn) if warn else "—",
-
-                # ✅ 欄名改成你要的 + 固定小數位
-                "決斷值(CR: Critical Ratio)": fmt(t, 4),
-                "CR_p值": fmt(p, 4),
-            })
-
-    out = pd.DataFrame(rows)
-
-    # ✅ 就算 rows 為空，也要保證欄位存在，避免 KeyError
-    expected_cols = [
-        "構面", "子構面", "題項",
-        "平均數", "標準差", "CITC", "因素負荷量",
-        "刪除後 Cronbach α", "該子構面整體 α",
-        "警示標記", "決斷值(CR: Critical Ratio)", "CR_p值"
-    ]
-    for col in expected_cols:
-        if col not in out.columns:
-            out[col] = ""
-
-    out = out[expected_cols].sort_values(by=["構面", "子構面", "題項"], kind="mergesort").reset_index(drop=True)
-    return out
+    return pd.DataFrame(results)
