@@ -5,13 +5,9 @@ import re
 from scipy.stats import ttest_ind
 
 def normalize_item_columns(df: pd.DataFrame):
-    """
-    正規化欄位名稱：偵測如 A11, B12 等格式並建立對照表。
-    """
     ITEM_CODE_RE = re.compile(r"^[A-Za-z]\d{1,3}(_\d+)?$")
     mapping = {}
     new_cols = []
-    
     for col in df.columns:
         s = str(col).strip()
         if ITEM_CODE_RE.match(s):
@@ -24,15 +20,11 @@ def normalize_item_columns(df: pd.DataFrame):
                 new_cols.append(code)
             else:
                 new_cols.append(col)
-                
     df_norm = df.copy()
     df_norm.columns = new_cols
     return df_norm, mapping
 
 def calculate_cronbach_alpha(df: pd.DataFrame):
-    """
-    計算 Cronbach's Alpha
-    """
     df = df.dropna()
     if df.shape[1] <= 1: return 0.0
     item_vars = df.var(ddof=1)
@@ -44,42 +36,38 @@ def calculate_cronbach_alpha(df: pd.DataFrame):
 
 def run_item_analysis(df_norm: pd.DataFrame):
     """
-    核心修正：對齊 JASP 獨立樣本 t 檢定邏輯
-    1. 分組基準：按「大構面 (A, B...)」所有題項平均後的總分排序。
-    2. 切分邏輯：採用排序後的樣本個數切分 (前 27% 與 後 27%)。
-    3. 格式：CR值與 p 值嚴格四捨五入至四位。
+    極致修正版：
+    1. 採用「嚴格名次法」：確保高低分組人數 (N) 恆定，不因分數相同而多計。
+    2. 針對大構面平均分排序，取前 27% 與後 27% 受試者。
+    3. 決斷值 (CR) 四捨五入至四位，P值強制顯示四位。
     """
     ITEM_CODE_RE = re.compile(r"^[A-Za-z]\d{1,3}(_\d+)?$")
     item_cols = [c for c in df_norm.columns if ITEM_CODE_RE.match(str(c))]
-    
-    if not item_cols:
-        return pd.DataFrame()
+    if not item_cols: return pd.DataFrame()
 
     df_items = df_norm[item_cols].apply(pd.to_numeric, errors='coerce')
     unique_main_dims = sorted(list(set([c[0].upper() for c in item_cols])))
     
-    # --- 預先計算每個大構面的高低分組標籤 ---
     group_map = {}
     for dim in unique_main_dims:
         dim_cols = [c for c in item_cols if c.startswith(dim)]
-        # 計算該大構面 (例如 A11~A24) 的平均數
         dim_mean = df_items[dim_cols].mean(axis=1, skipna=True)
         
-        # 修正分組邏輯：改用「排序位子」切分，而非「分數分位數」
-        # 這能確保參與 t 檢定的樣本數 (df) 與 JASP 完美同步
-        n = len(dim_mean)
-        k = int(round(n * 0.27)) 
+        # --- 核心：嚴格名次切分法 ---
+        n_total = len(dim_mean)
+        k = int(round(n_total * 0.27)) # 計算應取的人數 (例如 13 或 14 人)
         
-        sorted_means = dim_mean.sort_values()
+        # 建立帶索引的排序，遇到分數相同時，保留原始索引順序，確保人數不多不少
+        # 這是對齊 JASP $df$ 值的唯一解
+        ranked = dim_mean.sort_values(kind='mergesort')
         
-        # 取得邊界值
-        low_threshold = sorted_means.iloc[k-1] if k > 0 else -np.inf
-        high_threshold = sorted_means.iloc[-k] if k > 0 else np.inf
+        low_indices = ranked.head(k).index
+        high_indices = ranked.tail(k).index
         
-        # 標記高低分組
-        labels = np.zeros(n)
-        labels[dim_mean <= low_threshold] = 1 # 低分組
-        labels[dim_mean >= high_threshold] = 2 # 高分組
+        labels = np.zeros(n_total)
+        # 透過索引精確定位受試者
+        labels[dim_mean.index.isin(low_indices)] = 1 
+        labels[dim_mean.index.isin(high_indices)] = 2
         group_map[dim] = labels
 
     results = []
@@ -88,7 +76,6 @@ def run_item_analysis(df_norm: pd.DataFrame):
         sub_dim = col[:2].upper()
         col_data = df_items[col]
         
-        # CR值計算
         labels = group_map[main_dim]
         low_vals = col_data[labels == 1].dropna()
         high_vals = col_data[labels == 2].dropna()
@@ -100,7 +87,7 @@ def run_item_analysis(df_norm: pd.DataFrame):
         else:
             cr_value, cr_p = np.nan, np.nan
 
-        # 其他統計指標
+        # CITC 與 Alpha 計算
         sub_cols = [c for c in item_cols if c.startswith(sub_dim)]
         if len(sub_cols) > 1:
             sub_sum = df_items[sub_cols].sum(axis=1)
@@ -114,9 +101,7 @@ def run_item_analysis(df_norm: pd.DataFrame):
         loading = col_data.corr(df_items[sub_cols].mean(axis=1))
 
         results.append({
-            "構面": main_dim,
-            "子構面": sub_dim,
-            "題項": col,
+            "構面": main_dim, "子構面": sub_dim, "題項": col,
             "平均數": round(col_data.mean(), 4),
             "標準差": round(col_data.std(), 4),
             "CITC": round(citc, 4) if not np.isnan(citc) else "—",
@@ -127,5 +112,4 @@ def run_item_analysis(df_norm: pd.DataFrame):
             "決斷值(CR: Critical Ratio)": round(cr_value, 4) if not np.isnan(cr_value) else "",
             "CR_p值": f"{cr_p:.4f}" if not np.isnan(cr_p) else ""
         })
-
     return pd.DataFrame(results)
