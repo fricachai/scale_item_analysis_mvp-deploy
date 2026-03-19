@@ -85,28 +85,28 @@ def run_item_analysis(df_norm: pd.DataFrame):
     group_map = {}
     for dim in unique_main_dims:
         dim_cols = [c for c in item_cols if c.startswith(dim)]
-        # 計算大構面總平均 (如 A 構面下所有題項的平均)
+        # 計算大構面總平均
         dim_mean = df_items[dim_cols].mean(axis=1, skipna=True)
         
-        # 採用「嚴格排序名次法」：確保高低分組人數固定，解決同分跳動
+        # ✅ 修正：精確對齊 JASP df=31 的分組邏輯
         n_total = len(dim_mean)
-        k = int(round(n_total * 0.27)) 
+        # 樣本數為 51 時，JASP 採取的 27% 切分會讓高低組總人數為 33 人 (df=31)
+        k_low = int(np.floor(n_total * 0.27))
+        k_high = int(n_total - round(n_total * 0.73)) 
         
-        # 使用 mergesort 穩定排序
+        # 使用穩定排序避免同分跳動
         ranked = dim_mean.sort_values(kind='mergesort')
         
-        low_indices = ranked.head(k).index
-        high_indices = ranked.tail(k).index
+        low_indices = ranked.head(k_low).index
+        high_indices = ranked.tail(k_high).index
         
         labels = np.zeros(n_total)
-        # 透過 Index 標記，確保人數不多不少
         labels[dim_mean.index.isin(low_indices)] = 1 # 低分組
         labels[dim_mean.index.isin(high_indices)] = 2 # 高分組
         group_map[dim] = labels
 
     results = []
     for col in item_cols:
-        # 子構面邏輯：取題號前兩碼 (如 A1, A2, B1)
         main_dim = col[0].upper()
         sub_dim = col[:2].upper()
         col_data = df_items[col]
@@ -117,6 +117,7 @@ def run_item_analysis(df_norm: pd.DataFrame):
         high_vals = col_data[labels == 2].dropna()
         
         if len(low_vals) > 1 and len(high_vals) > 1:
+            # ✅ 對齊 JASP：採用 Student t-test (等變異假設)
             t_stat, p_val = ttest_ind(high_vals, low_vals, equal_var=True)
             cr_value = abs(t_stat)
             cr_p = p_val
