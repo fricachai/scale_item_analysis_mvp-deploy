@@ -67,8 +67,8 @@ def run_item_analysis(df_norm: pd.DataFrame):
         dim_mean = df_items[dim_cols].mean(axis=1, skipna=True)
         
         # 決定 27/73 分位數
-        low_q = dim_mean.quantile(0.27)
-        high_q = dim_mean.quantile(0.73)
+        low_q = dim_mean.quantile(0.27, interpolation='nearest')
+        high_q = dim_mean.quantile(0.73, interpolation='nearest')
         
         labels = np.zeros(len(dim_mean))
         labels[dim_mean <= low_q] = 1 # 低分組
