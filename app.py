@@ -34,7 +34,6 @@ except Exception:
 st.set_page_config(page_title="柴康偉 論文統計分析專業版(release 1.0) 2026.01.28 ", layout="wide")
 
 
-import streamlit as st
 import streamlit_authenticator as stauth
 import inspect
 
@@ -62,22 +61,19 @@ authenticator = stauth.Authenticate(
 def safe_login(authenticator):
     fn = authenticator.login
 
-    # 只允許「成功命中其中一種呼叫方式」就立刻回傳
-    # 注意：要同時 catch TypeError / ValueError，因為你前面也遇過 ValueError(location 限制)
     for call in [
-        lambda: fn("登入系統", "main"),          # 常見： (form_name, location)
-        lambda: fn("main", "登入系統"),          # 你雲端看起來像： (location, form_name)
-        lambda: fn("登入系統"),                  # 少數：只吃 form_name
-        lambda: fn(),                            # 少數：不吃參數
-        lambda: fn(location="main"),             # 有些版才吃 keyword
-        lambda: fn("登入系統", location="main"), # 有些新版才吃 keyword
+        lambda: fn("登入系統", "main"),
+        lambda: fn("main", "登入系統"),
+        lambda: fn("登入系統"),
+        lambda: fn(),
+        lambda: fn(location="main"),
+        lambda: fn("登入系統", location="main"),
     ]:
         try:
             return call()
         except (TypeError, ValueError):
             continue
 
-    # 如果所有模式都不支援，直接拋錯（讓你看到真錯誤）
     raise RuntimeError("streamlit-authenticator.login() 介面不相容：所有呼叫模式都失敗")
 
 
@@ -101,13 +97,6 @@ elif authentication_status is False:
 else:
     st.warning("請先登入")
     st.stop()
-
-
-
-
-
-
-
 
 
 st.title("📊 柴康偉 論文統計分析專業版(release 1.0) 2026.01.28")
@@ -152,8 +141,10 @@ def df_to_csv_bytes(df: pd.DataFrame) -> bytes:
     return df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
 
 
-# ===== Item code detection =====
-ITEM_CODE_RE = re.compile(r"^[A-Za-z]\d{2,3}(_\d+)?$")
+# =========================================================================
+# ✅ 修正點 1：放寬正則表達式，允許只有一碼數字的題號 (例如 D1, E4)
+# =========================================================================
+ITEM_CODE_RE = re.compile(r"^[A-Za-z]\d{1,3}(_\d+)?$")
 
 
 def _find_item_cols(df: pd.DataFrame) -> list[str]:
@@ -171,12 +162,6 @@ def _dim_letter(code: str) -> str | None:
 
 
 def build_dim_means_per_row(df_norm: pd.DataFrame) -> pd.DataFrame:
-    """
-    產生逐列（每份問卷一列）的構面平均：
-    - 依題項代碼第一碼決定構面（A/B/C...）
-    - 每列對該構面所有題目做 mean(axis=1, skipna=True)
-    - 輸出保留 float（後續迴歸/t檢定才不會被字串干擾）
-    """
     item_cols_all = _find_item_cols(df_norm)
     if not item_cols_all:
         return pd.DataFrame()
@@ -221,7 +206,6 @@ def _p_stars(p: float) -> str:
 
 
 def _format_no_leading_zero(x: float, ndigits: int = 4) -> str:
-    """把 0.0200 顯示成 .0200（比照論文表格）"""
     if pd.isna(x):
         return ""
     s = f"{x:.{ndigits}f}"
@@ -233,9 +217,6 @@ def _format_no_leading_zero(x: float, ndigits: int = 4) -> str:
 
 
 def _std_beta(params: pd.Series, X: pd.DataFrame, y: pd.Series) -> dict:
-    """
-    計算標準化係數 Beta：Beta = b * sd(x) / sd(y)
-    """
     sd_y = y.std(ddof=1)
     sd_x = X.std(ddof=1)
     out = {}
@@ -262,14 +243,6 @@ def _fmt_t(t: float) -> str:
 
 # ===== Regression table =====
 def build_regression_table(df: pd.DataFrame, iv_vars: list[str], dv_var: str):
-    """
-    產生迴歸表（比照論文表格）：
-    - 未標準化係數（b；欄名仍用「β估計值」以符合你的表頭）
-    - 標準化係數 Beta（Beta = b * sd(x) / sd(y)）
-    - t、顯著性(p)
-    - F、P(F)、R²、Adj R²、N
-    - ✅ 所有數值顯示到小數第 4 位
-    """
     if not iv_vars or not dv_var:
         raise ValueError("請先設定自變數與依變數。")
 
@@ -350,15 +323,6 @@ def build_mediation_results(
     n_boot: int = 2000,
     seed: int = 42,
 ):
-    """
-    產出中介分析（OLS）：
-    - 路徑 a: M ~ IV
-    - 路徑 c: DV ~ IV
-    - 路徑 b & c': DV ~ IV + M
-    - indirect = a*b
-    - Sobel z / p（近似）
-    - bootstrap CI（percentile）
-    """
     d = _to_num_df(df, [iv, med, dv])
     if d.empty:
         raise ValueError("可用資料為空（IV/M/DV 可能有空值或非數值）。")
@@ -450,30 +414,20 @@ def build_mediation_results(
 
 
 def build_mediation_paper_table(df: pd.DataFrame, iv: str, med: str, dv: str):
-    """
-    產出論文式中介分析迴歸表（對應你右邊那張表）：
-    條件二：DV=med, IV=[iv]
-    條件一：DV=dv,  IV=[iv]
-    條件三：DV=dv,  IV=[iv, med]
-    ✅ 所有數值顯示到小數第 4 位
-    """
     d = df[[iv, med, dv]].apply(pd.to_numeric, errors="coerce").dropna(axis=0, how="any")
     if d.empty:
         raise ValueError("可用資料為空（IV/M/DV 可能有空值或非數值）。")
 
-    # ---- Condition 2: M ~ IV ----
     y2 = d[med].astype(float)
     X2 = d[[iv]].astype(float)
     m2 = _fit_ols(y2, X2)
     beta2 = _std_beta(m2.params, X2, y2)
 
-    # ---- Condition 1: DV ~ IV ----
     y1 = d[dv].astype(float)
     X1 = d[[iv]].astype(float)
     m1 = _fit_ols(y1, X1)
     beta1 = _std_beta(m1.params, X1, y1)
 
-    # ---- Condition 3: DV ~ IV + M ----
     y3 = d[dv].astype(float)
     X3 = d[[iv, med]].astype(float)
     m3 = _fit_ols(y3, X3)
@@ -487,78 +441,50 @@ def build_mediation_paper_table(df: pd.DataFrame, iv: str, med: str, dv: str):
     col_c3_t = f"{dv}（條件三）t值"
 
     rows = []
+    rows.append({
+        "自變項": iv,
+        col_c2_beta: _fmt_beta(beta2.get(iv, np.nan), float(m2.pvalues.get(iv, np.nan))),
+        col_c2_t: _fmt_t(float(m2.tvalues.get(iv, np.nan))),
+        col_c1_beta: _fmt_beta(beta1.get(iv, np.nan), float(m1.pvalues.get(iv, np.nan))),
+        col_c1_t: _fmt_t(float(m1.tvalues.get(iv, np.nan))),
+        col_c3_beta: _fmt_beta(beta3.get(iv, np.nan), float(m3.pvalues.get(iv, np.nan))),
+        col_c3_t: _fmt_t(float(m3.tvalues.get(iv, np.nan))),
+    })
 
-    rows.append(
-        {
-            "自變項": iv,
-            col_c2_beta: _fmt_beta(beta2.get(iv, np.nan), float(m2.pvalues.get(iv, np.nan))),
-            col_c2_t: _fmt_t(float(m2.tvalues.get(iv, np.nan))),
-            col_c1_beta: _fmt_beta(beta1.get(iv, np.nan), float(m1.pvalues.get(iv, np.nan))),
-            col_c1_t: _fmt_t(float(m1.tvalues.get(iv, np.nan))),
-            col_c3_beta: _fmt_beta(beta3.get(iv, np.nan), float(m3.pvalues.get(iv, np.nan))),
-            col_c3_t: _fmt_t(float(m3.tvalues.get(iv, np.nan))),
-        }
-    )
+    rows.append({
+        "自變項": med,
+        col_c2_beta: "", col_c2_t: "", col_c1_beta: "", col_c1_t: "",
+        col_c3_beta: _fmt_beta(beta3.get(med, np.nan), float(m3.pvalues.get(med, np.nan))),
+        col_c3_t: _fmt_t(float(m3.tvalues.get(med, np.nan))),
+    })
 
-    rows.append(
-        {
-            "自變項": med,
-            col_c2_beta: "",
-            col_c2_t: "",
-            col_c1_beta: "",
-            col_c1_t: "",
-            col_c3_beta: _fmt_beta(beta3.get(med, np.nan), float(m3.pvalues.get(med, np.nan))),
-            col_c3_t: _fmt_t(float(m3.tvalues.get(med, np.nan))),
-        }
-    )
+    rows.append({
+        "自變項": "R²",
+        col_c2_beta: f"{float(m2.rsquared):.4f}", col_c2_t: "",
+        col_c1_beta: f"{float(m1.rsquared):.4f}", col_c1_t: "",
+        col_c3_beta: f"{float(m3.rsquared):.4f}", col_c3_t: "",
+    })
 
-    rows.append(
-        {
-            "自變項": "R²",
-            col_c2_beta: f"{float(m2.rsquared):.4f}",
-            col_c2_t: "",
-            col_c1_beta: f"{float(m1.rsquared):.4f}",
-            col_c1_t: "",
-            col_c3_beta: f"{float(m3.rsquared):.4f}",
-            col_c3_t: "",
-        }
-    )
+    rows.append({
+        "自變項": "ΔR²",
+        col_c2_beta: f"{float(m2.rsquared_adj):.4f}", col_c2_t: "",
+        col_c1_beta: f"{float(m1.rsquared_adj):.4f}", col_c1_t: "",
+        col_c3_beta: f"{float(m3.rsquared_adj):.4f}", col_c3_t: "",
+    })
 
-    rows.append(
-        {
-            "自變項": "ΔR²",
-            col_c2_beta: f"{float(m2.rsquared_adj):.4f}",
-            col_c2_t: "",
-            col_c1_beta: f"{float(m1.rsquared_adj):.4f}",
-            col_c1_t: "",
-            col_c3_beta: f"{float(m3.rsquared_adj):.4f}",
-            col_c3_t: "",
-        }
-    )
+    rows.append({
+        "自變項": "F",
+        col_c2_beta: f"{float(m2.fvalue):.4f}{_sig_stars(float(m2.f_pvalue))}", col_c2_t: "",
+        col_c1_beta: f"{float(m1.fvalue):.4f}{_sig_stars(float(m1.f_pvalue))}", col_c1_t: "",
+        col_c3_beta: f"{float(m3.fvalue):.4f}{_sig_stars(float(m3.f_pvalue))}", col_c3_t: "",
+    })
 
-    rows.append(
-        {
-            "自變項": "F",
-            col_c2_beta: f"{float(m2.fvalue):.4f}{_sig_stars(float(m2.f_pvalue))}",
-            col_c2_t: "",
-            col_c1_beta: f"{float(m1.fvalue):.4f}{_sig_stars(float(m1.f_pvalue))}",
-            col_c1_t: "",
-            col_c3_beta: f"{float(m3.fvalue):.4f}{_sig_stars(float(m3.f_pvalue))}",
-            col_c3_t: "",
-        }
-    )
-
-    rows.append(
-        {
-            "自變項": "D-W",
-            col_c2_beta: f"{float(durbin_watson(m2.resid)):.4f}",
-            col_c2_t: "",
-            col_c1_beta: f"{float(durbin_watson(m1.resid)):.4f}",
-            col_c1_t: "",
-            col_c3_beta: f"{float(durbin_watson(m3.resid)):.4f}",
-            col_c3_t: "",
-        }
-    )
+    rows.append({
+        "自變項": "D-W",
+        col_c2_beta: f"{float(durbin_watson(m2.resid)):.4f}", col_c2_t: "",
+        col_c1_beta: f"{float(durbin_watson(m1.resid)):.4f}", col_c1_t: "",
+        col_c3_beta: f"{float(durbin_watson(m3.resid)):.4f}", col_c3_t: "",
+    })
 
     table_df = pd.DataFrame(rows)
     meta = {"N": int(m3.nobs), "cond1": m1, "cond2": m2, "cond3": m3}
@@ -566,13 +492,6 @@ def build_mediation_paper_table(df: pd.DataFrame, iv: str, med: str, dv: str):
 
 
 def build_moderation_paper_table(df: pd.DataFrame, iv: str, mod: str, dv: str):
-    """
-    產出論文式干擾分析迴歸表：
-    模型一：DV ~ IV
-    模型二：DV ~ IV + MOD
-    模型三：DV ~ IV + MOD + (IV×MOD)
-    ✅ 所有數值顯示到小數第 4 位
-    """
     d = df[[iv, mod, dv]].apply(pd.to_numeric, errors="coerce").dropna(axis=0, how="any")
     if d.empty:
         raise ValueError("可用資料為空（IV/MOD/DV 可能有空值或非數值）。")
@@ -610,78 +529,52 @@ def build_moderation_paper_table(df: pd.DataFrame, iv: str, mod: str, dv: str):
     dr2_3 = r2_3 - r2_2
 
     rows = []
+    rows.append({
+        "自變項": iv,
+        col_m1_beta: _fmt_beta(beta1.get(iv, np.nan), float(m1.pvalues.get(iv, np.nan))),
+        col_m1_t: _fmt_t(float(m1.tvalues.get(iv, np.nan))),
+        col_m2_beta: _fmt_beta(beta2.get(iv, np.nan), float(m2.pvalues.get(iv, np.nan))),
+        col_m2_t: _fmt_t(float(m2.tvalues.get(iv, np.nan))),
+        col_m3_beta: _fmt_beta(beta3.get(iv, np.nan), float(m3.pvalues.get(iv, np.nan))),
+        col_m3_t: _fmt_t(float(m3.tvalues.get(iv, np.nan))),
+    })
 
-    rows.append(
-        {
-            "自變項": iv,
-            col_m1_beta: _fmt_beta(beta1.get(iv, np.nan), float(m1.pvalues.get(iv, np.nan))),
-            col_m1_t: _fmt_t(float(m1.tvalues.get(iv, np.nan))),
-            col_m2_beta: _fmt_beta(beta2.get(iv, np.nan), float(m2.pvalues.get(iv, np.nan))),
-            col_m2_t: _fmt_t(float(m2.tvalues.get(iv, np.nan))),
-            col_m3_beta: _fmt_beta(beta3.get(iv, np.nan), float(m3.pvalues.get(iv, np.nan))),
-            col_m3_t: _fmt_t(float(m3.tvalues.get(iv, np.nan))),
-        }
-    )
+    rows.append({
+        "自變項": mod,
+        col_m1_beta: "", col_m1_t: "",
+        col_m2_beta: _fmt_beta(beta2.get(mod, np.nan), float(m2.pvalues.get(mod, np.nan))),
+        col_m2_t: _fmt_t(float(m2.tvalues.get(mod, np.nan))),
+        col_m3_beta: _fmt_beta(beta3.get(mod, np.nan), float(m3.pvalues.get(mod, np.nan))),
+        col_m3_t: _fmt_t(float(m3.tvalues.get(mod, np.nan))),
+    })
 
-    rows.append(
-        {
-            "自變項": mod,
-            col_m1_beta: "",
-            col_m1_t: "",
-            col_m2_beta: _fmt_beta(beta2.get(mod, np.nan), float(m2.pvalues.get(mod, np.nan))),
-            col_m2_t: _fmt_t(float(m2.tvalues.get(mod, np.nan))),
-            col_m3_beta: _fmt_beta(beta3.get(mod, np.nan), float(m3.pvalues.get(mod, np.nan))),
-            col_m3_t: _fmt_t(float(m3.tvalues.get(mod, np.nan))),
-        }
-    )
+    rows.append({
+        "自變項": f"{iv}*{mod}",
+        col_m1_beta: "", col_m1_t: "", col_m2_beta: "", col_m2_t: "",
+        col_m3_beta: _fmt_beta(beta3.get(inter_name, np.nan), float(m3.pvalues.get(inter_name, np.nan))),
+        col_m3_t: _fmt_t(float(m3.tvalues.get(inter_name, np.nan))),
+    })
 
-    rows.append(
-        {
-            "自變項": f"{iv}*{mod}",
-            col_m1_beta: "",
-            col_m1_t: "",
-            col_m2_beta: "",
-            col_m2_t: "",
-            col_m3_beta: _fmt_beta(beta3.get(inter_name, np.nan), float(m3.pvalues.get(inter_name, np.nan))),
-            col_m3_t: _fmt_t(float(m3.tvalues.get(inter_name, np.nan))),
-        }
-    )
+    rows.append({
+        "自變項": "R²",
+        col_m1_beta: f"{r2_1:.4f}", col_m1_t: "",
+        col_m2_beta: f"{r2_2:.4f}", col_m2_t: "",
+        col_m3_beta: f"{r2_3:.4f}", col_m3_t: "",
+    })
 
-    rows.append(
-        {
-            "自變項": "R²",
-            col_m1_beta: f"{r2_1:.4f}",
-            col_m1_t: "",
-            col_m2_beta: f"{r2_2:.4f}",
-            col_m2_t: "",
-            col_m3_beta: f"{r2_3:.4f}",
-            col_m3_t: "",
-        }
-    )
+    rows.append({
+        "自變項": "ΔR²",
+        col_m1_beta: "", col_m1_t: "",
+        col_m2_beta: f"{dr2_2:.4f}", col_m2_t: "",
+        col_m3_beta: f"{dr2_3:.4f}", col_m3_t: "",
+    })
 
-    rows.append(
-        {
-            "自變項": "ΔR²",
-            col_m1_beta: "",
-            col_m1_t: "",
-            col_m2_beta: f"{dr2_2:.4f}",
-            col_m2_t: "",
-            col_m3_beta: f"{dr2_3:.4f}",
-            col_m3_t: "",
-        }
-    )
-
-    rows.append(
-        {
-            "自變項": "F",
-            col_m1_beta: f"{float(m1.fvalue):.4f}{_sig_stars(float(m1.f_pvalue))}",
-            col_m1_t: "",
-            col_m2_beta: f"{float(m2.fvalue):.4f}{_sig_stars(float(m2.f_pvalue))}",
-            col_m2_t: "",
-            col_m3_beta: f"{float(m3.fvalue):.4f}{_sig_stars(float(m3.f_pvalue))}",
-            col_m3_t: "",
-        }
-    )
+    rows.append({
+        "自變項": "F",
+        col_m1_beta: f"{float(m1.fvalue):.4f}{_sig_stars(float(m1.f_pvalue))}", col_m1_t: "",
+        col_m2_beta: f"{float(m2.fvalue):.4f}{_sig_stars(float(m2.f_pvalue))}", col_m2_t: "",
+        col_m3_beta: f"{float(m3.fvalue):.4f}{_sig_stars(float(m3.f_pvalue))}", col_m3_t: "",
+    })
 
     table_df = pd.DataFrame(rows)
     meta = {"N": int(m3.nobs), "interaction_col": inter_name}
@@ -689,9 +582,6 @@ def build_moderation_paper_table(df: pd.DataFrame, iv: str, mod: str, dv: str):
 
 
 def build_discriminant_validity_table(df_norm: pd.DataFrame, item_df: pd.DataFrame):
-    """
-    區別效度分析表（清理版：移除 U+00A0 隱形字元，採用 Pairwise Deletion）
-    """
     import re
     from scipy.stats import pearsonr
 
@@ -706,7 +596,6 @@ def build_discriminant_validity_table(df_norm: pd.DataFrame, item_df: pd.DataFra
     sub_scores = {}
 
     for sd in sub_dims:
-        # 使用正則表達式精確抓取題項（例如 A11, A12...），排除非題項欄位
         cols = [c for c in df_norm.columns if isinstance(c, str) and re.match(rf"^{sd}\d+", c)]
         if cols:
             sub_scores[sd] = (
@@ -715,7 +604,6 @@ def build_discriminant_validity_table(df_norm: pd.DataFrame, item_df: pd.DataFra
                 .mean(axis=1)
             )
 
-    # 建立構面分數表，此處保留原始資料（包含 NaN）以利後續 Pairwise 計算
     score_df = pd.DataFrame(sub_scores)
     mat = pd.DataFrame("", index=sub_dims, columns=sub_dims)
 
@@ -727,11 +615,9 @@ def build_discriminant_validity_table(df_norm: pd.DataFrame, item_df: pd.DataFra
                 except Exception:
                     mat.loc[r, c] = str(sub_alpha[r])
             elif i > j:
-                # 執行 Pairwise Deletion：針對當前這對變數排除缺失值
                 valid_pair = score_df[[r, c]].dropna()
                 
                 if len(valid_pair) > 2:
-                    # 計算 Pearson 相關係數，這將與 JASP 的預設結果對齊
                     r_val, p_val = pearsonr(valid_pair[r], valid_pair[c])
                     star = "**" if p_val < 0.01 else ""
                     mat.loc[r, c] = f"{r_val:.4f}{star}"
@@ -742,24 +628,32 @@ def build_discriminant_validity_table(df_norm: pd.DataFrame, item_df: pd.DataFra
 
     return mat
 
-# =========================
-# ✅ 構面現況分析表（題號/構面/問項/平均數/標準差/構面排序/構面平均）
-# =========================
 
+# =========================================================================
+# ✅ 修正點 2：子構面代碼判斷邏輯優化，正確捕捉 D1, E4 這類單一題號
+# =========================================================================
 def _subdim_code(item_code: str) -> str:
     """
-    子構面代碼：取題項代碼前兩碼
-    例如：A11→A1、A105→A1、D54→D5
+    子構面代碼邏輯：
+    - 若為 A11 -> A1 (字母+第一碼數字)
+    - 若為 D1, E4 -> D, E (無子構面，直接回傳字母)
     """
     s = str(item_code).strip()
+    m = re.match(r"^([A-Za-z])(\d+)(?:_(\d+))?$", s)
+    if m:
+        letter = m.group(1).upper()
+        digits = m.group(2)
+        # 若數字只有 1 碼，或者明確屬於無子構面的 D, E，直接回傳字母
+        if len(digits) == 1 or letter in ['D', 'E']:
+            return letter
+        else:
+            return letter + digits[0]
+            
+    # 保底機制
     return s[:2].upper() if len(s) >= 2 else s.upper()
 
 
 def _item_sort_key(code: str):
-    """
-    題號排序：A11, A12, ... A105, ... D54
-    規則：先字母，再數字（轉 int），再處理 _ 後綴
-    """
     s = str(code).strip()
     m = re.match(r"^([A-Za-z])(\d+)(?:_(\d+))?$", s)
     if not m:
@@ -771,21 +665,10 @@ def _item_sort_key(code: str):
 
 
 def build_item_status_table(df_raw: pd.DataFrame, df_norm: pd.DataFrame, mapping: dict) -> pd.DataFrame:
-    """
-    產出「構面現況分析表」（比照你第二張截圖的格式）
-    欄位：
-    - 題號：A11 ... D54（依實際題數）
-    - 構面：子構面代碼（A1、A2...）
-    - 問項：原始欄名（若原始欄名是完整題目就會顯示題目文字）
-    - 平均數、標準差：針對題項欄位計算（四位小數）
-    - 構面排序：該題在子構面內的平均數排名（1=最高；整數）
-    - 構面平均：該子構面所有題項之「平均數」再取平均（四位小數）
-    """
     item_cols = _find_item_cols(df_norm)
     if not item_cols:
         return pd.DataFrame()
 
-    # code -> 原始欄名（問項文字）
     inv_map = {}
     if isinstance(mapping, dict) and mapping:
         for k, v in mapping.items():
@@ -800,7 +683,7 @@ def build_item_status_table(df_raw: pd.DataFrame, df_norm: pd.DataFrame, mapping
         std_v = float(x.std(ddof=1)) if x.notna().sum() >= 2 else np.nan
 
         sub = _subdim_code(code)
-        q_text = inv_map.get(str(code).strip(), str(code).strip())  # 若沒有 mapping，就退回題號本身
+        q_text = inv_map.get(str(code).strip(), str(code).strip())
 
         rows.append({
             "題號": str(code).strip(),
@@ -812,7 +695,6 @@ def build_item_status_table(df_raw: pd.DataFrame, df_norm: pd.DataFrame, mapping
 
     out = pd.DataFrame(rows)
 
-    # 子構面平均：以「該子構面所有題項的平均數」再取平均（常見表格寫法）
     sub_mean_map = (
         out.groupby("構面")["平均數"]
         .mean()
@@ -820,17 +702,14 @@ def build_item_status_table(df_raw: pd.DataFrame, df_norm: pd.DataFrame, mapping
     )
     out["構面平均"] = out["構面"].map(sub_mean_map)
 
-    # 構面排序：子構面內依「平均數」由大到小排名（1=最高），整數
     out["構面排序"] = (
         out.groupby("構面")["平均數"]
         .rank(method="dense", ascending=False)
         .astype("Int64")
     )
 
-    # 題號排序
     out = out.sort_values(by="題號", key=lambda s: s.map(_item_sort_key)).reset_index(drop=True)
 
-    # 格式化（四位小數；構面排序整數）
     out["平均數"] = out["平均數"].map(lambda v: f"{v:.4f}" if np.isfinite(v) else "")
     out["標準差"] = out["標準差"].map(lambda v: f"{v:.4f}" if np.isfinite(v) else "")
     out["構面平均"] = out["構面平均"].map(lambda v: f"{v:.4f}" if np.isfinite(v) else "")
@@ -840,11 +719,6 @@ def build_item_status_table(df_raw: pd.DataFrame, df_norm: pd.DataFrame, mapping
 
 
 def _find_profile_cols(df_raw: pd.DataFrame, df_norm: pd.DataFrame) -> list[str]:
-    """
-    抓「個人基本資料欄位」：
-    - 以原始 df_raw 的欄名為準（顯示才是你要的中文）
-    - 排除題項欄位（A11/A105...）與已正規化題項欄位
-    """
     item_cols_norm = set(_find_item_cols(df_norm))
 
     profile_cols = []
@@ -859,15 +733,8 @@ def _find_profile_cols(df_raw: pd.DataFrame, df_norm: pd.DataFrame) -> list[str]
     return profile_cols
 
 def _find_profile_cols_left_of_items(df_raw: pd.DataFrame, mapping: dict) -> list[str]:
-    """
-    ✅ 抓「A11 問項左邊所有的個人基本資料欄位」（以 df_raw 欄位順序為準）
-    - mapping 的 key 是原始欄名（通常是中文題目），value 是題項代碼（A11...）
-    - 找到第一個題項欄位在 df_raw 的位置，取其左邊所有欄位作為基本資料
-    - 自動排除 Unnamed 欄位
-    """
     cols = list(df_raw.columns)
 
-    # 沒 mapping 就退回舊方法（保底）
     if not isinstance(mapping, dict) or not mapping:
         out = [c for c in cols if not str(c).strip().startswith("Unnamed")]
         return out
@@ -877,7 +744,6 @@ def _find_profile_cols_left_of_items(df_raw: pd.DataFrame, mapping: dict) -> lis
         out = [c for c in cols if not str(c).strip().startswith("Unnamed")]
         return out
 
-    # 找出最早出現的題項欄位位置（例如 A11 對應的那個中文題目欄位）
     idxs = [cols.index(k) for k in raw_item_cols]
     first_item_idx = min(idxs)
 
@@ -887,21 +753,12 @@ def _find_profile_cols_left_of_items(df_raw: pd.DataFrame, mapping: dict) -> lis
 
 
 def build_sample_profile_table(df_raw: pd.DataFrame, mapping: dict) -> tuple[pd.DataFrame, int]:
-    """
-    ✅ 生成「樣本基本資料分析表」
-    欄位：項目 / 樣本數 / 百分比(%) / 累積百分比(%)
-    呈現：每個基本資料變項下列出其類別與數值（類似你第三張截圖）
-    """
     profile_cols = _find_profile_cols_left_of_items(df_raw, mapping=mapping)
-
-    # N：以「有上傳的資料列數」為主（如果你要改成排除整列空白再算 N，也可再加規則）
     N = int(len(df_raw))
 
     rows = []
     for col in profile_cols:
         s = df_raw[col].copy()
-
-        # 清理空白與 NaN
         s = s.astype(str).str.strip()
         s = s.replace({"": np.nan, "nan": np.nan, "None": np.nan})
         s = s.dropna()
@@ -921,7 +778,7 @@ def build_sample_profile_table(df_raw: pd.DataFrame, mapping: dict) -> tuple[pd.
             cum += pct
 
             rows.append({
-                "項目": str(col) if first else "",        # 模擬合併儲存格：只在第一列顯示項目名
+                "項目": str(col) if first else "",
                 "類別": str(cat),
                 "樣本數": int(cnt),
                 "百分比(%)": round(pct, 1),
@@ -937,17 +794,8 @@ def build_independent_ttest_table(
     group_col: str,
     dv_cols: list[str],
 ):
-    """
-    獨立樣本 t 檢定表（Student's t-test, equal_var=True）
-    - 兩組名稱取自 group_col 的兩個類別文字
-    - 列：dv_cols（A/B/C...）
-    - ✅ 所有數值：小數第 4 位
-    - ✅ 顯著星號：標在「t值」欄位（依 p 值判斷）
-    - ✅ P值欄位：只顯示數值，不加星號
-    """
     d = df[[group_col] + dv_cols].copy()
 
-    # group 欄位清理
     d[group_col] = d[group_col].astype(str).str.strip()
     d = d.replace({group_col: {"": np.nan, "nan": np.nan, "None": np.nan}})
     d = d.dropna(subset=[group_col])
@@ -968,12 +816,10 @@ def build_independent_ttest_table(
             m1 = float(x1.mean()) if len(x1) else np.nan
             m2 = float(x2.mean()) if len(x2) else np.nan
         else:
-            # Student t-test（等變異）
             ttest = ttest_ind(x1, x2, equal_var=True, nan_policy="omit")
             tval, pval = float(ttest.statistic), float(ttest.pvalue)
             m1, m2 = float(x1.mean()), float(x2.mean())
 
-        # ✅ 星號依 p 判斷，但要加在 t 值上
         t_star = _p_stars(pval) if np.isfinite(pval) else ""
 
         rows.append(
@@ -990,17 +836,6 @@ def build_independent_ttest_table(
     meta = {"group1": str(g1), "group2": str(g2)}
     return out, meta
 
-def _p_stars(p: float) -> str:
-    if pd.isna(p):
-        return ""
-    if p < 0.001:
-        return "***"
-    if p < 0.01:
-        return "**"
-    if p < 0.05:
-        return "*"
-    return ""
-
 
 def _fmt_f_with_stars(F: float, p: float) -> str:
     if not np.isfinite(F):
@@ -1016,23 +851,16 @@ def _scheffe_posthoc_pairs(
     dfw: int,
     alpha: float = 0.05,
 ) -> str:
-    """
-    Scheffé 事後比較（pairwise）
-    回傳格式例如： "3>1,2"、"2,3>1"、"3>1"；若無顯著則回傳 "—"
-    規則：以組別順序 1..k 表示；方向由平均數大小決定。
-    """
     if dfw <= 0 or dfb <= 0 or (not np.isfinite(msw)) or msw <= 0:
         return "—"
 
-    labels = list(group_means.keys())  # 保持 UI 顯示順序
+    labels = list(group_means.keys())
     k = len(labels)
     if k < 3:
         return "—"
 
-    # 用數字編碼 1..k
     idx_map = {lab: i + 1 for i, lab in enumerate(labels)}
 
-    # 收集顯著 pair：用「大者 > 小者」
     sig_pairs = []
     for i in range(k):
         for j in range(i + 1, k):
@@ -1048,12 +876,10 @@ def _scheffe_posthoc_pairs(
             if denom <= 0:
                 continue
 
-            # Scheffé pairwise F
             F_pair = (diff * diff) / denom / dfb
             p_pair = float(f_dist.sf(F_pair, dfb, dfw))
 
             if p_pair < alpha:
-                # direction: higher mean > lower mean
                 if mi > mj:
                     sig_pairs.append((idx_map[li], idx_map[lj]))
                 elif mj > mi:
@@ -1062,13 +888,10 @@ def _scheffe_posthoc_pairs(
     if not sig_pairs:
         return "—"
 
-    # 將結果整理成像論文的「3>1,2」形式：
-    # 先把每個「勝者」對應的「敗者集合」彙總
     win_to_losers: dict[int, set[int]] = {}
     for w, l in sig_pairs:
         win_to_losers.setdefault(w, set()).add(l)
 
-    # 生成字串：依勝者由大到小排（純呈現，與均值大小通常一致）
     parts = []
     for w in sorted(win_to_losers.keys(), reverse=True):
         losers = sorted(win_to_losers[w])
@@ -1082,16 +905,8 @@ def build_oneway_anova_table(
     group_col: str,
     dv_cols: list[str],
 ):
-    """
-    單因子變異數分析表（One-way ANOVA）+ Scheffé post hoc
-    - 欄：各組平均數（欄名=組別文字）
-    - F值：顯示到小數第4位 + 顯著星號（依 p）
-    - P值：顯示到小數第4位（可加去首0的格式）
-    - Scheffe法：用 1..k 表示組別，輸出如 3>1,2
-    """
     d = df[[group_col] + dv_cols].copy()
 
-    # group 欄位清理
     d[group_col] = d[group_col].astype(str).str.strip()
     d = d.replace({group_col: {"": np.nan, "nan": np.nan, "None": np.nan}})
     d = d.dropna(subset=[group_col])
@@ -1103,7 +918,6 @@ def build_oneway_anova_table(
     rows = []
 
     for v in dv_cols:
-        # 各組資料
         xs = []
         ns = {}
         means = {}
@@ -1114,19 +928,15 @@ def build_oneway_anova_table(
             ns[str(g)] = int(len(xg))
             means[str(g)] = float(xg.mean()) if len(xg) else np.nan
 
-        # 至少每組要有資料才有意義
         valid_groups = [g for g in groups if ns[str(g)] >= 2]
         k = len(groups)
         N = sum(ns[str(g)] for g in groups)
 
         if N <= k or len(valid_groups) < 3:
-            # 資料不足：留空
             Fv, pv = (np.nan, np.nan)
             msw = np.nan
             dfb, dfw = (k - 1, N - k)
         else:
-            # ---- 計算 ANOVA：MSB / MSW ----
-            # grand mean
             all_vals = []
             for g in groups:
                 xg = pd.to_numeric(d.loc[d[group_col] == g, v], errors="coerce").dropna().values
@@ -1134,7 +944,6 @@ def build_oneway_anova_table(
             all_concat = np.concatenate([a for a in all_vals if len(a) > 0])
             grand_mean = float(np.mean(all_concat))
 
-            # SSB, SSW
             ssb = 0.0
             ssw = 0.0
             for g in groups:
@@ -1156,7 +965,6 @@ def build_oneway_anova_table(
             else:
                 Fv, pv = (np.nan, np.nan)
 
-        # Scheffé
         scheffe_txt = _scheffe_posthoc_pairs(
             group_means=means,
             group_ns=ns,
@@ -1167,12 +975,10 @@ def build_oneway_anova_table(
         )
 
         row = {"變項": v}
-        # 各組平均數欄（顯示四位）
         for g in groups:
             m = means.get(str(g), np.nan)
             row[str(g)] = f"{m:.4f}" if np.isfinite(m) else ""
 
-        # F / P / Scheffe
         row["F值"] = _fmt_f_with_stars(float(Fv), float(pv)) if np.isfinite(Fv) else ""
         row["P值"] = _format_no_leading_zero(float(pv), 4) if np.isfinite(pv) else ""
         row["Scheffe法"] = scheffe_txt
@@ -1181,7 +987,6 @@ def build_oneway_anova_table(
 
     out = pd.DataFrame(rows)
 
-    # 組別編碼說明（1..k）
     code_map = {i + 1: str(g) for i, g in enumerate(groups)}
     meta = {"groups": groups, "code_map": code_map}
     return out, meta
@@ -1209,8 +1014,7 @@ with st.sidebar:
 
     st.divider()
     st.subheader("子構面規則（你指定）")
-    st.write("子構面只取題項代碼的**前兩碼**：例如 A01→A0、A11→A1、A105→A1")
-    st.caption("※ 這個規則需由 analysis.py 的分群邏輯配合（若你已改好 analysis.py 就會生效）。")
+    st.write("子構面只取題項代碼的**前兩碼**：例如 A01→A0、A11→A1、A105→A1。若為 D, E 則獨立計算。")
 
 
 # ---- Main ----
@@ -1239,9 +1043,6 @@ with st.expander("欄名正規化對照（原始欄名 → 題項代碼）"):
 st.subheader("📈 Item Analysis 結果")
 
 try:
-    # =========================================================
-    # 1️⃣ Item Analysis
-    # =========================================================
     result_df = run_item_analysis(df_norm)
     st.success("Item analysis completed.")
     st.dataframe(result_df, width="stretch", height=520)
@@ -1253,9 +1054,6 @@ try:
         mime="text/csv",
     )
 
-    # =========================================================
-    # 2️⃣ 構面逐列平均（僅供分析使用）
-    # =========================================================
     df_dim_means_row = build_dim_means_per_row(df_norm)
     if df_dim_means_row.empty:
         st.warning("找不到題項代碼欄位，無法產生構面平均（A/B/C...）。")
@@ -1267,9 +1065,6 @@ try:
 
     dim_cols = list(df_dim_means_row.columns)
 
-    # =========================================================
-    # 3️⃣ Discriminant Validity（獨立 try / except）
-    # =========================================================
     st.divider()
     st.subheader("📊 區別效度分析表")
 
@@ -1290,9 +1085,6 @@ try:
         st.error("區別效度分析失敗（safe）")
         safe_show_exception(e)
 
-    # =========================================================
-    # ✅ 3.4️⃣ 構面現況分析表（題號/構面/問項/平均數/標準差/構面排序/構面平均）
-    # =========================================================
     st.divider()
     st.subheader("📋 構面現況分析表")
 
@@ -1315,39 +1107,30 @@ try:
         st.error("構面現況分析表失敗（safe）")
         safe_show_exception(e)
 
-    # =========================================================
-    # ✅ 3.4.1️⃣ 樣本基本資料分析表（A11 左邊基本資料欄位）
-    # （放在：構面現況分析表下載後面、t 檢定前面）
-    # =========================================================
     st.divider()
 
-    # ✅ 標題要完全照你指定
-    # N = 填答問卷的筆數
     try:
         sample_profile_df, N_profile = build_sample_profile_table(df_raw=df_raw, mapping=mapping)
 
         st.subheader(f"樣本基本資料分析表(N={N_profile})")
 
         if sample_profile_df.empty:
-                    st.info("找不到可用的基本資料欄位（A11 左側欄位）或資料皆為空。")
+            st.info("找不到可用的基本資料欄位（A11 左側欄位）或資料皆為空。")
         else:
-                    st.dataframe(sample_profile_df, width="stretch", height=520)
+            st.dataframe(sample_profile_df, width="stretch", height=520)
 
-                    st.download_button(
-                        "下載 樣本基本資料分析表 CSV",
-                        data=df_to_csv_bytes(sample_profile_df),
-                        file_name="sample_profile_table.csv",
-                        mime="text/csv",
-                    )
+            st.download_button(
+                "下載 樣本基本資料分析表 CSV",
+                data=df_to_csv_bytes(sample_profile_df),
+                file_name="sample_profile_table.csv",
+                mime="text/csv",
+            )
 
     except Exception as e:
-                st.error("樣本基本資料分析表失敗（safe）")
-                safe_show_exception(e)    
+        st.error("樣本基本資料分析表失敗（safe）")
+        safe_show_exception(e)  
 
 
-    # =========================================================
-    # ✅ 3.5️⃣ Independent Samples t-test（基本資料 → 構面A/B/C...）
-    # =========================================================
     st.divider()
     st.subheader("📊 獨立樣本 t 檢定（基本資料分組）")
 
@@ -1381,7 +1164,6 @@ try:
                         )
 
                         st.dataframe(t_table, width="stretch")
-                        # ✅ 你指定：表格最下方註解
                         st.caption("註：* P<0.05，** P<0.01，*** P<0.001")
 
                         st.download_button(
@@ -1401,9 +1183,6 @@ try:
         st.error("t 檢定區塊失敗（safe）")
         safe_show_exception(e)
 
-     # =========================================================
-    # ✅ 3.6️⃣ One-way ANOVA（基本資料 → 構面A/B/C...）
-    # =========================================================
     st.divider()
     st.subheader("📊 單因子變異數分析（基本資料分組）")
 
@@ -1438,11 +1217,8 @@ try:
                         )
 
                         st.dataframe(a_table, width="stretch")
-
-                        # 註解：星號規則
                         st.caption("註：* P<0.05，** P<0.01，*** P<0.001")
 
-                        # Scheffe 組別編碼對照（1..k）
                         code_map = meta.get("code_map", {})
                         if code_map:
                             mapping_txt = "；".join([f"{k}={v}" for k, v in code_map.items()])
@@ -1465,9 +1241,6 @@ try:
         st.error("ANOVA 區塊失敗（safe）")
         safe_show_exception(e)
 
-    # =========================================================
-    # 4️⃣ 研究變數設定（IV / DV）
-    # =========================================================
     st.divider()
     st.subheader("📌 研究變數設定（自變數 / 依變數）")
 
@@ -1491,9 +1264,6 @@ try:
             mime="text/csv",
         )
 
-        # =====================================================
-        # 5️⃣ Regression
-        # =====================================================
         st.divider()
         st.subheader("📊 迴歸分析表（論文格式）")
 
@@ -1520,7 +1290,7 @@ except Exception as e:
     safe_show_exception(e)
     st.stop()
 
-# ====== Mediation Settings (互斥：A/B/C/D... 只能出現在一個位置) ======
+
 st.divider()
 st.subheader("🧩 中介分析設定")
 
@@ -1589,9 +1359,6 @@ else:
     st.info("請依序選擇 IV / M / DV（且三者不可重複）後，才會顯示中介分析資料與結果。")
 
 
-# =========================
-# Moderation (IV -> DV moderated by W)
-# =========================
 st.divider()
 st.subheader("🧩 干擾分析設定")
 
