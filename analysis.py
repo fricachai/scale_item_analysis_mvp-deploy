@@ -9,8 +9,9 @@ from scipy.stats import ttest_ind
 # - A01.題目
 # - A01 題目
 # - A01題目（代碼後直接接中文字，也要能抓到）
-CODE_RE_PLAIN = re.compile(r"^[A-Za-z]\d{2,3}$")
-CODE_RE_FROM_TEXT = re.compile(r"^([A-Za-z]\d{2,3})(?:[\.、\s]|(?=[^\d]))")
+# ✅ 修正：正則表達式放寬，允許 1 碼數字 (如 D1, E4)
+CODE_RE_PLAIN = re.compile(r"^[A-Za-z]\d{1,3}$")
+CODE_RE_FROM_TEXT = re.compile(r"^([A-Za-z]\d{1,3})(?:[\.、\s]|(?=[^\d]))")
 
 def normalize_item_columns(df: pd.DataFrame):
     """
@@ -62,6 +63,29 @@ def calculate_cronbach_alpha(df: pd.DataFrame):
     alpha = (k / (k - 1)) * (1 - item_vars.sum() / total_var)
     return alpha
 
+# ✅ 新增：子構面判定邏輯函數，處理 D, E 等無子構面狀況
+def _subdim_code(item_code: str) -> str:
+    """
+    子構面代碼邏輯優化：
+    - 若為 A11 -> A1 (字母+第一碼數字)
+    - 若為 D1, E4 -> D, E (無子構面，直接回傳字母)
+    """
+    s = str(item_code).strip()
+    m = re.match(r"^([A-Za-z])(\d+)(?:_(\d+))?$", s)
+    if m:
+        letter = m.group(1).upper()
+        digits = m.group(2)
+        
+        # 若數字只有 1 碼 (如 D1)，或明確屬於無子構面的 D, E，直接回傳字母
+        if len(digits) == 1 or letter in ['D', 'E']:
+            return letter
+        else:
+            return letter + digits[0]
+            
+    # 保底機制
+    return s[:2].upper() if len(s) >= 2 else s.upper()
+
+
 def run_item_analysis(df_norm: pd.DataFrame):
     """
     核心修正：執行項目分析並對齊 JASP 獨立樣本 t 檢定邏輯
@@ -69,8 +93,8 @@ def run_item_analysis(df_norm: pd.DataFrame):
     2. 嚴格切分：固定選取 16/17 人（總計 33 人），確保 df=31 與 JASP 同步。
     3. 綜合標記：整合平均數、CITC、負荷量、刪題α與 CR 值。
     """
-    # 識別題項欄位
-    ITEM_CODE_RE = re.compile(r"^[A-Za-z]\d{2,3}(_\d+)?$")
+    # ✅ 修正：識別題項欄位放寬為 \d{1,3}
+    ITEM_CODE_RE = re.compile(r"^[A-Za-z]\d{1,3}(_\d+)?$")
     item_cols = [c for c in df_norm.columns if ITEM_CODE_RE.match(str(c).strip())]
     
     if not item_cols:
@@ -88,10 +112,8 @@ def run_item_analysis(df_norm: pd.DataFrame):
         # 計算大構面總平均 (如 A 構面下所有題項的平均)
         dim_mean = df_items[dim_cols].mean(axis=1, skipna=True)
         
-        # ✅ 修正：強制對齊 JASP df=31 的分組人數
+        # 強制對齊 JASP df=31 的分組人數
         n_total = len(dim_mean)
-        # 樣本數為 51 時，df=31 代表參與檢定人數為 33 人
-        # 我們強制分配：低分組 16 人，高分組 17 人
         k_low = 16
         k_high = 17
         
@@ -114,7 +136,8 @@ def run_item_analysis(df_norm: pd.DataFrame):
     results = []
     for col in item_cols:
         main_dim = col[0].upper()
-        sub_dim = col[:2].upper()
+        # ✅ 修正：使用自訂函數來取得正確的子構面
+        sub_dim = _subdim_code(col)
         col_data = df_items[col]
         
         # 1. 決斷值 (CR) 計算
@@ -123,7 +146,6 @@ def run_item_analysis(df_norm: pd.DataFrame):
         high_vals = col_data[labels == 2].dropna()
         
         if len(low_vals) > 1 and len(high_vals) > 1:
-            # ✅ 對齊 JASP：採用 Student t-test (等變異假設)
             t_stat, p_val = ttest_ind(high_vals, low_vals, equal_var=True)
             cr_value = abs(t_stat)
             cr_p = p_val
