@@ -4,18 +4,13 @@ import numpy as np
 import re
 from scipy.stats import ttest_ind
 
-# ✅ 支援欄名：
-# - A11
-# - A01.題目
-# - A01 題目
-# - A01題目（代碼後直接接中文字，也要能抓到）
-# ✅ 修正：正則表達式放寬，允許 1 碼數字 (如 D1, E4)
+# ✅ 終極強化版正則表達式：只要開頭是英文+1~3個數字，後面不管接什麼中文字或符號，一律強行抓取代碼
 CODE_RE_PLAIN = re.compile(r"^[A-Za-z]\d{1,3}$")
-CODE_RE_FROM_TEXT = re.compile(r"^([A-Za-z]\d{1,3})(?:[\.、\s]|(?=[^\d]))")
+CODE_RE_FROM_TEXT = re.compile(r"^([A-Za-z]\d{1,3})(?:[^0-9]|$)")
 
 def normalize_item_columns(df: pd.DataFrame):
     """
-    將欄名正規化成純代碼（A01/A11/A101...），並回傳 mapping：原欄名 -> 代碼
+    將欄名正規化成純代碼（A01/A11/A101/D1/E4...），並回傳 mapping：原欄名 -> 代碼
     """
     mapping = {}
     used = set()
@@ -63,7 +58,6 @@ def calculate_cronbach_alpha(df: pd.DataFrame):
     alpha = (k / (k - 1)) * (1 - item_vars.sum() / total_var)
     return alpha
 
-# ✅ 新增：子構面判定邏輯函數，處理 D, E 等無子構面狀況
 def _subdim_code(item_code: str) -> str:
     """
     子構面代碼邏輯優化：
@@ -89,11 +83,8 @@ def _subdim_code(item_code: str) -> str:
 def run_item_analysis(df_norm: pd.DataFrame):
     """
     核心修正：執行項目分析並對齊 JASP 獨立樣本 t 檢定邏輯
-    1. 支援大構面基準：決斷值(CR)依「大構面」總平均進行排序分組。
-    2. 嚴格切分：固定選取 16/17 人（總計 33 人），確保 df=31 與 JASP 同步。
-    3. 綜合標記：整合平均數、CITC、負荷量、刪題α與 CR 值。
     """
-    # ✅ 修正：識別題項欄位放寬為 \d{1,3}
+    # 識別題項欄位放寬為 \d{1,3}
     ITEM_CODE_RE = re.compile(r"^[A-Za-z]\d{1,3}(_\d+)?$")
     item_cols = [c for c in df_norm.columns if ITEM_CODE_RE.match(str(c).strip())]
     
@@ -102,41 +93,33 @@ def run_item_analysis(df_norm: pd.DataFrame):
 
     df_items = df_norm[item_cols].apply(pd.to_numeric, errors='coerce')
     
-    # 取得大構面清單 (A, B, C...)
+    # 取得大構面清單 (A, B, C, D, E...)
     unique_main_dims = sorted(list(set([c[0].upper() for c in item_cols])))
     
     # --- 預先計算每個「大構面」的高低分組標籤 ---
     group_map = {}
     for dim in unique_main_dims:
         dim_cols = [c for c in item_cols if c.startswith(dim)]
-        # 計算大構面總平均 (如 A 構面下所有題項的平均)
         dim_mean = df_items[dim_cols].mean(axis=1, skipna=True)
         
-        # 強制對齊 JASP df=31 的分組人數
         n_total = len(dim_mean)
         k_low = 16
         k_high = 17
-        
-        # 確保 k 值不會超過總樣本一半
         k_low = min(k_low, n_total // 2)
         k_high = min(k_high, n_total // 2)
 
-        # 使用穩定排序 (mergesort) 抓取 Index，解決同分跳動問題
         ranked = dim_mean.sort_values(kind='mergesort')
-        
         low_indices = ranked.head(k_low).index
         high_indices = ranked.tail(k_high).index
         
         labels = np.zeros(n_total)
-        # 透過 Index 標記，確保人數絕對固定
-        labels[dim_mean.index.isin(low_indices)] = 1 # 低分組
-        labels[dim_mean.index.isin(high_indices)] = 2 # 高分組
+        labels[dim_mean.index.isin(low_indices)] = 1 
+        labels[dim_mean.index.isin(high_indices)] = 2
         group_map[dim] = labels
 
     results = []
     for col in item_cols:
         main_dim = col[0].upper()
-        # ✅ 修正：使用自訂函數來取得正確的子構面
         sub_dim = _subdim_code(col)
         col_data = df_items[col]
         
