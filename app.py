@@ -915,7 +915,8 @@ def build_oneway_anova_table(
     if len(groups) < 3:
         raise ValueError(f"此欄位需至少 3 組才可做單因子變異數分析（目前={len(groups)}組）。")
 
-    rows = []
+    rows_comp = []
+    rows_anova = []
 
     for v in dv_cols:
         xs = []
@@ -936,6 +937,7 @@ def build_oneway_anova_table(
             Fv, pv = (np.nan, np.nan)
             msw = np.nan
             dfb, dfw = (k - 1, N - k)
+            ssb, ssw = (np.nan, np.nan)
         else:
             all_vals = []
             for g in groups:
@@ -965,6 +967,7 @@ def build_oneway_anova_table(
             else:
                 Fv, pv = (np.nan, np.nan)
 
+        # Scheffe Post-Hoc
         scheffe_txt = _scheffe_posthoc_pairs(
             group_means=means,
             group_ns=ns,
@@ -974,6 +977,7 @@ def build_oneway_anova_table(
             alpha=0.05,
         )
 
+        # --- 建立原本的「差異比較表」資料 ---
         row = {"變項": v}
         for g in groups:
             m = means.get(str(g), np.nan)
@@ -983,13 +987,46 @@ def build_oneway_anova_table(
         row["P值"] = _format_no_leading_zero(float(pv), 4) if np.isfinite(pv) else ""
         row["Scheffe法"] = scheffe_txt
 
-        rows.append(row)
+        rows_comp.append(row)
 
-    out = pd.DataFrame(rows)
+        # --- 建立新增的「單因子變異數分析表」資料 ---
+        if np.isfinite(ssb) and np.isfinite(ssw):
+            p_star_str = _p_stars(pv)
+            rows_anova.append({
+                "變項": v,
+                "變異來源": "組間",
+                "平方和": f"{ssb:.3f}",
+                "自由度": dfb,
+                "均方": f"{msb:.3f}",
+                "F 值": f"{Fv:.3f}",
+                "P 值": f"{pv:.3f}{p_star_str}" if pv < 0.05 else f"{pv:.3f}"
+            })
+            rows_anova.append({
+                "變項": "",
+                "變異來源": "組內",
+                "平方和": f"{ssw:.3f}",
+                "自由度": dfw,
+                "均方": f"{msw:.3f}",
+                "F 值": "",
+                "P 值": ""
+            })
+            rows_anova.append({
+                "變項": "",
+                "變異來源": "總計",
+                "平方和": f"{(ssb+ssw):.3f}",
+                "自由度": dfb + dfw,
+                "均方": "",
+                "F 值": "",
+                "P 值": ""
+            })
+
+    out_comp = pd.DataFrame(rows_comp)
+    out_anova = pd.DataFrame(rows_anova)
 
     code_map = {i + 1: str(g) for i, g in enumerate(groups)}
     meta = {"groups": groups, "code_map": code_map}
-    return out, meta
+    
+    return out_anova, out_comp, meta
 
 
 # ---- Sidebar ----
@@ -1207,15 +1244,19 @@ try:
                     df_for_a[c] = df_dim_means_row[c]
 
                 for gc in picked_profiles_anova:
-                    st.markdown(f"### {gc} 單因子變異數分析表")
-
                     try:
-                        a_table, meta = build_oneway_anova_table(
+                        anova_summary_table, a_table, meta = build_oneway_anova_table(
                             df_for_a,
                             group_col=gc,
                             dv_cols=dim_cols_for_a,
                         )
 
+                        # 新增：單因子變異數分析表
+                        st.markdown(f"### {gc} 單因子變異數分析表")
+                        st.dataframe(anova_summary_table, width="stretch")
+
+                        # 修改：差異比較表
+                        st.markdown(f"### {gc} 差異比較表")
                         st.dataframe(a_table, width="stretch")
                         st.caption("註：* P<0.05，** P<0.01，*** P<0.001")
 
@@ -1226,8 +1267,15 @@ try:
 
                         st.download_button(
                             f"下載 {gc} 單因子變異數分析表 CSV",
+                            data=df_to_csv_bytes(anova_summary_table),
+                            file_name=f"anova_summary_{str(gc).strip()}.csv",
+                            mime="text/csv",
+                        )
+
+                        st.download_button(
+                            f"下載 {gc} 差異比較表 CSV",
                             data=df_to_csv_bytes(a_table),
-                            file_name=f"anova_{str(gc).strip()}.csv",
+                            file_name=f"anova_comparison_{str(gc).strip()}.csv",
                             mime="text/csv",
                         )
 
